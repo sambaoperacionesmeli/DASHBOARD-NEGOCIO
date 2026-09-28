@@ -2435,15 +2435,17 @@ L.HeatLayer=(L.Layer?L.Layer:L.Class).extend({initialize:function(t,i){this._lat
 </script>
 <style>
 :root{
-  --bg:#f0f4f8;--card:#fff;--sb:#1a2535;--sb2:#131e2d;
-  --acc:#2563eb;--acc2:#1d4ed8;--grn:#16a34a;--red:#dc2626;--orn:#d97706;
-  --tx:#1e293b;--mu:#64748b;--br:#e2e8f0;--r:10px;
-  --ml:#f59e0b;--tn:#7c3aed;--cx:#0d9488;
+  --bg:#f3f4f7;--card:#fff;--sb:#12192b;--sb2:#0c1120;
+  --acc:#2b5fd9;--acc2:#1d4ed8;--grn:#1a8a53;--red:#d33a3a;--orn:#c8860a;
+  --tx:#1c2433;--mu:#707c8c;--br:#e6e8ee;--r:12px;
+  --ml:#e0951f;--tn:#6d43c9;--cx:#0f8f83;
+  --shadow:0 1px 2px rgba(20,25,40,.04),0 2px 10px rgba(20,25,40,.06);
+  --shadow-hover:0 2px 4px rgba(20,25,40,.06),0 6px 18px rgba(20,25,40,.09);
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;
+body{font-family:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;font-size:13px;
   background:var(--bg);color:var(--tx);height:100vh;display:flex;
-  flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased}
+  flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased;letter-spacing:.01em}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#c8d3de;border-radius:3px}
 /* Topbar */
@@ -2458,9 +2460,9 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;
 .tbtn{border:none;color:#fff;
   padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;
   transition:all .15s;display:inline-flex;align-items:center;gap:6px;letter-spacing:.01em}
-.tbtn.ml{background:#d97706;color:#fff}.tbtn.ml:hover{background:#b45309}
-.tbtn.tn{background:#7c3aed;color:#fff}.tbtn.tn:hover{background:#6d28d9}
-.tbtn.cx{background:#0d9488;color:#fff}.tbtn.cx:hover{background:#0f766e}
+.tbtn.ml{background:var(--ml);color:#fff}.tbtn.ml:hover{background:#c07d18}
+.tbtn.tn{background:var(--tn);color:#fff}.tbtn.tn:hover{background:#5c37ab}
+.tbtn.cx{background:var(--cx);color:#fff}.tbtn.cx:hover{background:#0c7a70}
 /* Layout */
 #main{display:flex;flex:1;overflow:hidden}
 #sb{width:234px;background:var(--sb2);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
@@ -2591,16 +2593,18 @@ select option{background:#1a2535}
 .bg.ml{background:#fef3c7;color:#92400e}.bg.tn{background:#ede9fe;color:#5b21b6}
 .bg.cx{background:#ccfbf1;color:#0f766e}
 /* KPIs */
-#kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin-bottom:12px}
-.kpi{background:#fff;border-radius:var(--r);padding:13px 16px;
-  border:1px solid var(--br);position:relative;overflow:hidden}
-.kpi::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}
+#kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:12px;margin-bottom:14px}
+.kpi{background:#fff;border-radius:var(--r);padding:14px 16px 13px;
+  border:1px solid var(--br);position:relative;overflow:hidden;
+  box-shadow:var(--shadow);transition:box-shadow .15s,transform .15s}
+.kpi:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
+.kpi::before{content:"";position:absolute;top:0;left:0;bottom:0;width:3px}
 .kpi.bl::before{background:var(--acc)}.kpi.gr::before{background:var(--grn)}
 .kpi.or::before{background:var(--orn)}.kpi.rd::before{background:var(--red)}
-.kpi.pu::before{background:#7c3aed}.kpi.tl::before{background:#0d9488}
-.kl{font-size:9px;font-weight:700;color:var(--mu);letter-spacing:.05em;margin-bottom:5px;text-transform:uppercase}
-.kv{font-size:22px;font-weight:700;line-height:1.1}
-.ks{font-size:10px;color:var(--mu);margin-top:3px}
+.kpi.pu::before{background:#6d43c9}.kpi.tl::before{background:#0f8f83}
+.kl{font-size:9.5px;font-weight:700;color:var(--mu);letter-spacing:.07em;margin-bottom:6px;text-transform:uppercase}
+.kv{font-size:23px;font-weight:650;line-height:1.1;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.ks{font-size:10.5px;color:var(--mu);margin-top:4px}
 /* Comparativa */
 .cmp-bar{display:flex;gap:10px;margin-bottom:12px;overflow-x:auto}
 .cmp-card{border-radius:var(--r);padding:13px 16px;border:2px solid;flex:1;min-width:180px}
@@ -2614,9 +2618,10 @@ select option{background:#1a2535}
 .cmp-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px}
 .cmp-k{font-size:11px;color:var(--mu)}.cmp-v{font-size:13px;font-weight:600}
 /* Cards */
-.card{background:#fff;border-radius:var(--r);border:1px solid var(--br);overflow:hidden}
-.ch{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--br)}
-.ct{font-size:13px;font-weight:600}.cs{font-size:11px;color:var(--mu)}
+.card{background:#fff;border-radius:var(--r);border:1px solid var(--br);overflow:hidden;box-shadow:var(--shadow);transition:box-shadow .15s}
+.card:hover{box-shadow:var(--shadow-hover)}
+.ch{display:flex;align-items:center;justify-content:space-between;padding:13px 17px;border-bottom:1px solid var(--br)}
+.ct{font-size:13px;font-weight:650;letter-spacing:-.005em}.cs{font-size:11px;color:var(--mu);margin-top:1px}
 .cb{padding:12px}.cw{position:relative;height:218px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
@@ -2747,19 +2752,19 @@ input[type=file]{display:none}
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     Cualquier Excel/CSV
   </button>
-  <button class="tbtn" id="tbtn-ventas" onclick="showVentasModule()" style="background:#16a34a;color:#fff">
+  <button class="tbtn" id="tbtn-ventas" onclick="showVentasModule()" style="background:#1a8a53;color:#fff">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6" rx="1"/><rect x="12" y="7" width="3" height="10" rx="1"/><rect x="17" y="4" width="3" height="13" rx="1"/></svg>
     Ventas
   </button>
-  <button class="tbtn" id="tbtn-pubs" onclick="showPubsModule()" style="background:#7c3aed;color:#fff">
+  <button class="tbtn" id="tbtn-pubs" onclick="showPubsModule()" style="background:#6d43c9;color:#fff">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/></svg>
     Publicaciones
   </button>
-  <button class="tbtn" id="tbtn-pub" onclick="showPubModule()" style="background:#7e22ce;color:#fff">
+  <button class="tbtn" id="tbtn-pub" onclick="showPubModule()" style="background:#7a3f9e;color:#fff">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8h10M7 12h6"/></svg>
     Publicidad ML
   </button>
-  <button class="tbtn" id="tbtn-mkt" onclick="showMktModule()" style="background:#0ea5e9;color:#fff">
+  <button class="tbtn" id="tbtn-mkt" onclick="showMktModule()" style="background:#2f7fb8;color:#fff">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
     Tendencias
   </button>
@@ -4183,6 +4188,22 @@ input[type=file]{display:none}
 
 <script>
 Chart.register(ChartDataLabels)
+Chart.defaults.font.family = "'Segoe UI', system-ui, -apple-system, sans-serif"
+Chart.defaults.font.size = 11
+Chart.defaults.color = "#707c8c"
+Chart.defaults.borderColor = "#eef0f4"
+Chart.defaults.plugins.legend.labels.usePointStyle = true
+Chart.defaults.plugins.legend.labels.boxWidth = 7
+Chart.defaults.plugins.legend.labels.padding = 12
+Chart.defaults.plugins.tooltip.backgroundColor = "#1c2433"
+Chart.defaults.plugins.tooltip.titleFont = { family: "'Segoe UI', system-ui, sans-serif", weight: "600", size: 12 }
+Chart.defaults.plugins.tooltip.bodyFont = { family: "'Segoe UI', system-ui, sans-serif", size: 11 }
+Chart.defaults.plugins.tooltip.padding = 10
+Chart.defaults.plugins.tooltip.cornerRadius = 6
+Chart.defaults.plugins.tooltip.displayColors = true
+Chart.defaults.plugins.tooltip.boxPadding = 4
+Chart.defaults.scale.grid.color = "#eef0f4"
+Chart.defaults.scale.ticks.color = "#8993a3"
 
 const S = { sids:[], periodo:"dia", page:0, charts:{}, _tot:0, catCols:[], numCols:[], platform:"__all__", _flexMap:null, _lastDashboard:null }
 const DS = {}  // { sid: { name, source, rows, cols, colInfo, config } }
@@ -4221,7 +4242,7 @@ function srcTag(f){
 }
 function dc(id){if(S.charts[id]){S.charts[id].destroy();delete S.charts[id]}}
 
-const COLORS=["#2563eb","#7c3aed","#16a34a","#f59e0b","#dc2626","#0d9488","#db2777","#0369a1","#65a30d","#9333ea","#e11d48","#0891b2"]
+const COLORS=["#2b5fd9","#0f8f83","#c8860a","#6d43c9","#d33a3a","#1a8a53","#3d7ab8","#a3562c","#5c6bc0","#8a8f36","#c04570","#3892a6"]
 const SRC_COLORS={"Mercado Libre":"#f59e0b","Tienda Nube":"#7c3aed"}
 
 function srcColor(name){
