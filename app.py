@@ -2449,9 +2449,10 @@ body{font-family:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#c8d3de;border-radius:3px}
 /* Topbar */
-#top{min-height:52px;background:var(--sb);display:flex;align-items:center;
-  gap:8px;padding:0 12px;flex-shrink:0;flex-wrap:wrap}
-.logo{display:flex;align-items:center;gap:8px;color:#fff;font-weight:700;font-size:15px}
+#top{min-height:54px;background:var(--sb);display:flex;align-items:center;
+  gap:8px;padding:0 14px;flex-shrink:0;flex-wrap:wrap;
+  box-shadow:0 2px 8px rgba(0,0,0,.18);position:relative;z-index:5}
+.logo{display:flex;align-items:center;gap:9px;color:#fff;font-weight:700;font-size:15.5px;letter-spacing:-.01em}
 .chips{display:flex;gap:3px}
 .chip{font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:.05em}
 .chip-ml{background:var(--ml);color:#1a1a1a}
@@ -2593,18 +2594,30 @@ select option{background:#1a2535}
 .bg.ml{background:#fef3c7;color:#92400e}.bg.tn{background:#ede9fe;color:#5b21b6}
 .bg.cx{background:#ccfbf1;color:#0f766e}
 /* KPIs */
-#kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:12px;margin-bottom:14px}
-.kpi{background:#fff;border-radius:var(--r);padding:14px 16px 13px;
+#kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:#fff;border-radius:14px;padding:38px 16px 15px 18px;
   border:1px solid var(--br);position:relative;overflow:hidden;
   box-shadow:var(--shadow);transition:box-shadow .15s,transform .15s}
-.kpi:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
-.kpi::before{content:"";position:absolute;top:0;left:0;bottom:0;width:3px}
-.kpi.bl::before{background:var(--acc)}.kpi.gr::before{background:var(--grn)}
-.kpi.or::before{background:var(--orn)}.kpi.rd::before{background:var(--red)}
-.kpi.pu::before{background:#6d43c9}.kpi.tl::before{background:#0f8f83}
-.kl{font-size:9.5px;font-weight:700;color:var(--mu);letter-spacing:.07em;margin-bottom:6px;text-transform:uppercase}
-.kv{font-size:23px;font-weight:650;line-height:1.1;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
-.ks{font-size:10.5px;color:var(--mu);margin-top:4px}
+.kpi:hover{box-shadow:var(--shadow-hover);transform:translateY(-2px)}
+.kico{position:absolute;top:14px;right:14px;width:28px;height:28px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.kico svg{width:15px;height:15px}
+.kl{position:absolute;top:16px;left:18px;right:52px}
+.kpi.bl{background:linear-gradient(160deg,#eef2fc 0%,#fff 55%)}
+.kpi.bl .kico{background:rgba(43,95,217,.13);color:var(--acc)}
+.kpi.gr{background:linear-gradient(160deg,#eaf6ef 0%,#fff 55%)}
+.kpi.gr .kico{background:rgba(26,138,83,.13);color:var(--grn)}
+.kpi.or{background:linear-gradient(160deg,#faf1e0 0%,#fff 55%)}
+.kpi.or .kico{background:rgba(200,134,10,.14);color:var(--orn)}
+.kpi.rd{background:linear-gradient(160deg,#faeaea 0%,#fff 55%)}
+.kpi.rd .kico{background:rgba(211,58,58,.13);color:var(--red)}
+.kpi.pu{background:linear-gradient(160deg,#f0ecfa 0%,#fff 55%)}
+.kpi.pu .kico{background:rgba(109,67,201,.14);color:#6d43c9}
+.kpi.tl{background:linear-gradient(160deg,#e8f5f3 0%,#fff 55%)}
+.kpi.tl .kico{background:rgba(15,143,131,.14);color:#0f8f83}
+.kl{font-size:9.5px;font-weight:700;color:var(--mu);letter-spacing:.08em;margin-bottom:7px;text-transform:uppercase}
+.kv{font-size:23px;font-weight:700;line-height:1.15;letter-spacing:-.01em;font-variant-numeric:tabular-nums;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ks{font-size:10.5px;color:var(--mu);margin-top:5px}
 /* Comparativa */
 .cmp-bar{display:flex;gap:10px;margin-bottom:12px;overflow-x:auto}
 .cmp-card{border-radius:var(--r);padding:13px 16px;border:2px solid;flex:1;min-width:180px}
@@ -4223,6 +4236,15 @@ function fN(n){
   if(n==null||isNaN(n))return"—"
   return Number.isInteger(n)?n.toLocaleString("es-AR"):n.toFixed(1)
 }
+const KICONS={
+  money:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.1 1.2-2 3-2s3 .9 3 2-1.2 1.7-3 2-3 .9-3 2 1.2 2 3 2 3-.9 3-2"/>',
+  check:'<circle cx="12" cy="12" r="9"/><path d="M7.5 12.5l3 3 6-6.5"/>',
+  box:'<path d="M21 7.5l-9-5-9 5 9 5 9-5z"/><path d="M3 7.5v9l9 5 9-5v-9"/><path d="M12 12.5v9"/>',
+  receipt:'<path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2v-19z"/><path d="M9 7.5h6M9 11.5h6"/>',
+  truck:'<rect x="1.5" y="7.5" width="12" height="8.5"/><path d="M13.5 10h3.5l3 3v3h-6.5"/><circle cx="5.5" cy="18" r="1.5"/><circle cx="16.5" cy="18" r="1.5"/>',
+  tag:'<path d="M20 12.5l-7.5 7.5-8.5-8.5v-7.5h7.5l8.5 8.5z"/><circle cx="8" cy="8" r="1.2"/>',
+}
+function kIco(name,cls){return`<div class="kico ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${KICONS[name]}</svg></div>`}
 function etag(e){
   if(!e||e==="null")return""
   const s=e.toLowerCase()
@@ -5085,14 +5107,14 @@ function rd(d){
   // KPIs
   const _hasEntregado = (m.ingresos_entregado !== undefined && m.ingresos_entregado > 0) || (m.unidades_entregado !== undefined && m.unidades_entregado > 0)
   $("kpis").innerHTML=`
-    <div class="kpi bl"><div class="kl">INGRESOS</div><div class="kv">${fmt(m.ingresos)}</div><div class="ks">Neto: ${fmt(m.total_neto)}</div></div>
-    ${_hasEntregado ? `<div class="kpi gr" style="border-top:3px solid #10b981;position:relative"><div class="kl" style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;flex-shrink:0"></span>ING. ENTREGADO</div><div class="kv" style="color:#10b981">${fmt(m.ingresos_entregado)}</div><div class="ks">${m.n_entregado} entregados</div></div>` : ""}
-    ${_hasEntregado ? `<div class="kpi tl" style="border-top:3px solid #0d9488;position:relative"><div class="kl" style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#0d9488;flex-shrink:0"></span>UNID. ENTREGADAS</div><div class="kv" style="color:#0d9488">${fN(m.unidades_entregado)}</div><div class="ks">${m.tasa_ok}% del total</div></div>` : ""}
-    <div class="kpi gr"><div class="kl">UNIDADES</div><div class="kv">${fN(m.unidades)}</div><div class="ks">${m.n_ventas} órdenes</div></div>
-    <div class="kpi or"><div class="kl">TICKET PROM.</div><div class="kv">${fmt(m.ticket_prom)}</div><div class="ks">por orden</div></div>
-    <div class="kpi rd"><div class="kl">COSTOS</div><div class="kv">${fmt(m.costo)}</div><div class="ks">envío + cargos</div></div>
-    <div class="kpi pu"><div class="kl">DESCUENTOS</div><div class="kv">${fmt(m.descuentos)}</div><div class="ks">aplicados</div></div>
-    <div class="kpi tl"><div class="kl">% COBRADO/OK</div><div class="kv">${m.tasa_ok}%</div><div class="ks">del total</div></div>`
+    <div class="kpi bl">${kIco('money','bl')}<div class="kl">INGRESOS</div><div class="kv">${fmt(m.ingresos)}</div><div class="ks">Neto: ${fmt(m.total_neto)}</div></div>
+    ${_hasEntregado ? `<div class="kpi gr">${kIco('check','gr')}<div class="kl">ING. ENTREGADO</div><div class="kv">${fmt(m.ingresos_entregado)}</div><div class="ks">${m.n_entregado} entregados</div></div>` : ""}
+    ${_hasEntregado ? `<div class="kpi tl">${kIco('box','tl')}<div class="kl">UNID. ENTREGADAS</div><div class="kv">${fN(m.unidades_entregado)}</div><div class="ks">${m.tasa_ok}% del total</div></div>` : ""}
+    <div class="kpi gr">${kIco('box','gr')}<div class="kl">UNIDADES</div><div class="kv">${fN(m.unidades)}</div><div class="ks">${m.n_ventas} órdenes</div></div>
+    <div class="kpi or">${kIco('receipt','or')}<div class="kl">TICKET PROM.</div><div class="kv">${fmt(m.ticket_prom)}</div><div class="ks">por orden</div></div>
+    <div class="kpi rd">${kIco('truck','rd')}<div class="kl">COSTOS</div><div class="kv">${fmt(m.costo)}</div><div class="ks">envío + cargos</div></div>
+    <div class="kpi pu">${kIco('tag','pu')}<div class="kl">DESCUENTOS</div><div class="kv">${fmt(m.descuentos)}</div><div class="ks">aplicados</div></div>
+    <div class="kpi tl">${kIco('check','tl')}<div class="kl">% COBRADO/OK</div><div class="kv">${m.tasa_ok}%</div><div class="ks">del total</div></div>`
 
   // Comparativa por fuente
   const mpf=d.metricas_por_fuente||{}
