@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: dashify
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    envVars:
+      - key: DASHIFY_PASSWORD
+        sync: false   # la cargás vos a mano en el panel de Render, no queda en el repo
+      - key: DASHIFY_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false   # connection string de tu proyecto gratis en Supabase (ver guía)
