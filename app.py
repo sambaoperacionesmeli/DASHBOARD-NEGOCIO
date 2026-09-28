@@ -3891,35 +3891,7 @@ input[type=file]{display:none}
       </div>
     </div>
   </div>
-</div>
-</div>
 
-<!-- Modal configurador de columnas -->
-<div class="modal-bg" id="modal-cfg">
-<div class="modal">
-  <div class="modal-head">
-    <span class="modal-title" id="modal-cfg-title">Configurar columnas</span>
-    <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="closeModal()">✕</button>
-  </div>
-  <div class="modal-body">
-    <div class="info-tip">
-      Asigná el <strong>rol</strong> de cada columna para que Dashify sepa qué representa cada dato.
-      Los campos con ★ son los más importantes para las visualizaciones.
-    </div>
-    <div class="role-grid" id="role-grid"></div>
-    <div style="margin-top:16px">
-      <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--mu)">Vista previa de los primeros datos:</div>
-      <div style="overflow-x:auto"><table class="preview-table" id="preview-tbl"></table></div>
-    </div>
-  </div>
-  <div class="modal-foot">
-    <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn btn-primary" onclick="applyConfig()">Aplicar configuración</button>
-  </div>
-</div>
-</div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <div id="cotizador-module" style="display:none;flex:1;overflow-y:auto">
 <style>
 #cotizador-module{
@@ -4169,6 +4141,36 @@ input[type=file]{display:none}
 
 
 </div>
+
+</div>
+</div>
+
+<!-- Modal configurador de columnas -->
+<div class="modal-bg" id="modal-cfg">
+<div class="modal">
+  <div class="modal-head">
+    <span class="modal-title" id="modal-cfg-title">Configurar columnas</span>
+    <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="closeModal()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="info-tip">
+      Asigná el <strong>rol</strong> de cada columna para que Dashify sepa qué representa cada dato.
+      Los campos con ★ son los más importantes para las visualizaciones.
+    </div>
+    <div class="role-grid" id="role-grid"></div>
+    <div style="margin-top:16px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--mu)">Vista previa de los primeros datos:</div>
+      <div style="overflow-x:auto"><table class="preview-table" id="preview-tbl"></table></div>
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="applyConfig()">Aplicar configuración</button>
+  </div>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <script>
 Chart.register(ChartDataLabels)
