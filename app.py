@@ -3953,6 +3953,15 @@ input[type=file]{display:none}
   font-size:14px;
 }
 #cotizador-module .field input:focus{outline:2px solid var(--cot-accent);outline-offset:1px;}
+#cotizador-module input[type=file]{
+  display:block!important;
+  width:auto;
+  padding:6px 4px;
+  border:none;
+  background:transparent;
+  font-size:13px;
+  color:var(--cot-ink);
+}
 
 #cotizador-module .addrow{
   display:flex;
