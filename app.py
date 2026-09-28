@@ -2574,25 +2574,27 @@ select option{background:#1a2535}
 /* Welcome */
 #wlc{display:flex;align-items:center;justify-content:center;flex:1;
   gap:18px;padding:28px;flex-direction:column}
-.wlc-inner{display:flex;gap:16px;max-width:920px;width:100%;flex-wrap:wrap;justify-content:center}
-.drop-card{flex:1;min-width:240px;max-width:290px;border:2px dashed var(--br);border-radius:14px;
-  padding:30px 24px;display:flex;flex-direction:column;align-items:center;gap:11px;
-  cursor:pointer;transition:all .2s;background:#fff;text-align:center}
-.drop-card.ml:hover,.drop-card.ml.dg{border-color:var(--ml);background:#fffbeb}
-.drop-card.tn:hover,.drop-card.tn.dg{border-color:var(--tn);background:#f5f3ff}
-.drop-card.cx:hover,.drop-card.cx.dg{border-color:var(--cx);background:#f0fdfa}
-.dc-ico{width:54px;height:54px;border-radius:13px;display:flex;align-items:center;justify-content:center}
-.dc-ico.ml{background:#fef3c7}.dc-ico.tn{background:#ede9fe}.dc-ico.cx{background:#ccfbf1}
-.dc-t{font-size:15px;font-weight:700}
-.dc-s{color:var(--mu);font-size:12px;line-height:1.5}
-.dc-btn{padding:8px 20px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:none;margin-top:2px}
-.dc-btn.ml{background:var(--ml);color:#1a1a1a}.dc-btn.ml:hover{background:#d97706}
-.dc-btn.tn{background:var(--tn);color:#fff}.dc-btn.tn:hover{background:#6d28d9}
-.dc-btn.cx{background:var(--cx);color:#fff}.dc-btn.cx:hover{background:#0f766e}
+.wlc-inner{display:flex;gap:18px;max-width:960px;width:100%;flex-wrap:wrap;justify-content:center}
+.drop-card{flex:1;min-width:240px;max-width:290px;border:1px solid var(--br);border-radius:16px;
+  padding:32px 26px;display:flex;flex-direction:column;align-items:center;gap:12px;
+  cursor:pointer;transition:all .18s;background:#fff;text-align:center;
+  box-shadow:var(--shadow)}
+.drop-card:hover{box-shadow:var(--shadow-hover);transform:translateY(-3px)}
+.drop-card.ml:hover,.drop-card.ml.dg{border-color:var(--ml)}
+.drop-card.tn:hover,.drop-card.tn.dg{border-color:var(--tn)}
+.drop-card.cx:hover,.drop-card.cx.dg{border-color:var(--cx)}
+.dc-ico{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center}
+.dc-ico.ml{background:rgba(224,149,31,.13)}.dc-ico.tn{background:rgba(109,67,201,.13)}.dc-ico.cx{background:rgba(15,143,131,.13)}
+.dc-t{font-size:15.5px;font-weight:700;letter-spacing:-.005em}
+.dc-s{color:var(--mu);font-size:12px;line-height:1.55}
+.dc-btn{padding:9px 22px;border-radius:8px;font-size:12.5px;font-weight:650;cursor:pointer;border:none;margin-top:4px;transition:opacity .15s}
+.dc-btn.ml{background:var(--ml);color:#fff}.dc-btn.ml:hover{opacity:.88}
+.dc-btn.tn{background:var(--tn);color:#fff}.dc-btn.tn:hover{opacity:.88}
+.dc-btn.cx{background:var(--cx);color:#fff}.dc-btn.cx:hover{opacity:.88}
 .fmt{display:flex;gap:5px;flex-wrap:wrap;justify-content:center}
-.bg{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:500}
-.bg.ml{background:#fef3c7;color:#92400e}.bg.tn{background:#ede9fe;color:#5b21b6}
-.bg.cx{background:#ccfbf1;color:#0f766e}
+.bg{padding:2px 9px;border-radius:20px;font-size:10px;font-weight:600}
+.bg.ml{background:rgba(224,149,31,.13);color:#96650f}.bg.tn{background:rgba(109,67,201,.13);color:#5c34a8}
+.bg.cx{background:rgba(15,143,131,.13);color:#0c6f65}
 /* KPIs */
 #kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,1fr));gap:12px;margin-bottom:16px}
 .kpi{background:#fff;border-radius:14px;padding:38px 16px 15px 18px;
@@ -3070,38 +3072,41 @@ input[type=file]{display:none}
 
   <!-- Welcome -->
   <div id="wlc" style="display:flex">
-    <div style="text-align:center;margin-bottom:12px">
-      <div style="font-size:20px;font-weight:700">Dashboard Multi-Marketplace</div>
-      <div style="color:var(--mu);font-size:13px;margin-top:4px">Cargá uno o varios archivos de cualquier fuente</div>
+    <div style="text-align:center;margin-bottom:22px">
+      <div style="display:inline-flex;align-items:center;gap:9px;color:var(--acc);font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">
+        <span style="width:22px;height:1.5px;background:var(--acc);opacity:.4"></span>Panel de control<span style="width:22px;height:1.5px;background:var(--acc);opacity:.4"></span>
+      </div>
+      <div style="font-size:25px;font-weight:700;letter-spacing:-.015em;color:var(--tx)">Dashboard Multi-Marketplace</div>
+      <div style="color:var(--mu);font-size:13.5px;margin-top:6px">Cargá uno o varios archivos de cualquier fuente para empezar</div>
     </div>
     <div class="wlc-inner">
       <div class="drop-card ml" id="dz-ml" ondragover="dov(event,'ml')" ondragleave="dlv('ml')" ondrop="drp(event,'ml')">
-        <div class="dc-ico ml"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <div class="dc-ico ml"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#e0951f" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
         <div class="dc-t">Mercado Libre</div>
         <div class="dc-s">Reporte desde Mis Ventas → Exportar</div>
         <div class="fmt"><span class="bg ml">.xlsx</span><span class="bg ml">.xls</span></div>
         <button class="dc-btn ml" onclick="trig('ml')">Seleccionar</button>
       </div>
       <div class="drop-card tn" id="dz-tn" ondragover="dov(event,'tn')" ondragleave="dlv('tn')" ondrop="drp(event,'tn')">
-        <div class="dc-ico tn"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <div class="dc-ico tn"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#6d43c9" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
         <div class="dc-t">Tienda Nube</div>
         <div class="dc-s">Reporte Panel TN → Informes, o cualquier CSV/Excel etiquetado como Tienda Nube</div>
         <div class="fmt"><span class="bg tn">.xlsx</span><span class="bg tn">.csv</span></div>
         <button class="dc-btn tn" onclick="trig('tn')">Seleccionar</button>
       </div>
       <div class="drop-card cx" id="dz-cx" ondragover="dov(event,'cx')" ondragleave="dlv('cx')" ondrop="drp(event,'cx')">
-        <div class="dc-ico cx"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0d9488" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>
+        <div class="dc-ico cx"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0f8f83" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>
         <div class="dc-t">Cualquier Excel / CSV</div>
         <div class="dc-s">Detecta columnas automáticamente.<br>Podés mapearlas a medida.</div>
         <div class="fmt"><span class="bg cx">.xlsx</span><span class="bg cx">.csv</span><span class="bg cx">.ods</span></div>
         <button class="dc-btn cx" onclick="trig('cx')">Seleccionar</button>
       </div>
-      <div class="drop-card" id="dz-fichas" ondragover="dov(event,'fichas')" ondragleave="dlv('fichas')" ondrop="drp(event,'fichas')" style="border-color:rgba(99,102,241,.4);min-width:220px;max-width:260px">
-        <div class="dc-ico" style="background:rgba(99,102,241,.12)"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><line x1="13" y1="13" x2="17" y2="13"/><line x1="13" y1="17" x2="17" y2="17"/></svg></div>
-        <div class="dc-t" style="color:#a5b4fc">Fichas Técnicas ML</div>
+      <div class="drop-card" id="dz-fichas" ondragover="dov(event,'fichas')" ondragleave="dlv('fichas')" ondrop="drp(event,'fichas')" style="border-color:rgba(92,86,194,.35);min-width:220px;max-width:260px">
+        <div class="dc-ico" style="background:rgba(92,86,194,.13)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#5c56c2" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/><line x1="13" y1="13" x2="17" y2="13"/><line x1="13" y1="17" x2="17" y2="17"/></svg></div>
+        <div class="dc-t" style="color:#453f9e">Fichas Técnicas ML</div>
         <div class="dc-s">Asigna categorías reales a tus publicaciones ML por ID, SKU o título.</div>
-        <div class="fmt"><span class="bg" style="background:rgba(99,102,241,.15);color:#a5b4fc">.xlsx</span></div>
-        <button class="dc-btn" onclick="trig('fichas')" style="background:#6366f1;color:#fff">Cargar</button>
+        <div class="fmt"><span class="bg" style="background:rgba(92,86,194,.13);color:#453f9e">.xlsx</span></div>
+        <button class="dc-btn" onclick="trig('fichas')" style="background:#5c56c2;color:#fff">Cargar</button>
       </div>
     </div>
     <div style="font-size:11px;color:var(--mu);text-align:center">También podés arrastrar archivos directamente sobre las tarjetas</div>
