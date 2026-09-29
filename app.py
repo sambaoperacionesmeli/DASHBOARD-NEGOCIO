@@ -2470,6 +2470,14 @@ body{font-family:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-
 #ct{flex:1;overflow-y:auto;padding:14px 16px}
 /* Sidebar */
 .sb-inner{padding:13px 11px}
+.sb-nav{padding:2px 0 12px;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sb-navitem{width:100%;display:flex;align-items:center;gap:9px;background:transparent;
+  color:rgba(255,255,255,.62);padding:9px 10px;border-radius:8px;font-size:12.5px;font-weight:600;
+  margin-bottom:2px;justify-content:flex-start;border:none;cursor:pointer;text-align:left;
+  transition:background .15s,color .15s}
+.sb-navitem:hover{background:rgba(255,255,255,.06);color:#fff}
+.sb-navitem svg{flex-shrink:0;opacity:.9}
+.nav-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .ss{font-size:9px;font-weight:700;letter-spacing:.1em;color:rgba(255,255,255,.24);
   margin-bottom:6px;text-transform:uppercase}
 .src-area{border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,.07);margin-bottom:8px}
@@ -2770,26 +2778,6 @@ input[type=file]{display:none}
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     Cualquier Excel/CSV
   </button>
-  <button class="tbtn" id="tbtn-ventas" onclick="showVentasModule()" style="background:#1a8a53;color:#fff">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6" rx="1"/><rect x="12" y="7" width="3" height="10" rx="1"/><rect x="17" y="4" width="3" height="13" rx="1"/></svg>
-    Ventas
-  </button>
-  <button class="tbtn" id="tbtn-pubs" onclick="showPubsModule()" style="background:#6d43c9;color:#fff">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/></svg>
-    Publicaciones
-  </button>
-  <button class="tbtn" id="tbtn-pub" onclick="showPubModule()" style="background:#7a3f9e;color:#fff">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8h10M7 12h6"/></svg>
-    Publicidad ML
-  </button>
-  <button class="tbtn" id="tbtn-mkt" onclick="showMktModule()" style="background:#2f7fb8;color:#fff">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-    Tendencias
-  </button>
-  <button class="tbtn" id="tbtn-cotizador" onclick="showCotizadorModule()" style="background:#7a2e2e;color:#fff">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M9 9a3 3 0 0 1 3-1.5c1.7 0 3 1 3 2.5s-1.3 2.5-3 2.5-3 1-3 2.5 1.3 2.5 3 2.5a3 3 0 0 0 3-1.5"/></svg>
-    Cotizador
-  </button>
 
 </div>
 
@@ -2804,6 +2792,34 @@ input[type=file]{display:none}
 <div id="main">
 <div id="sb">
 <div class="sb-inner">
+
+  <div class="sb-nav">
+    <button class="sb-navitem" id="tbtn-ventas" onclick="showVentasModule()">
+      <span class="nav-dot" style="background:#1a8a53"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6" rx="1"/><rect x="12" y="7" width="3" height="10" rx="1"/><rect x="17" y="4" width="3" height="13" rx="1"/></svg>
+      Ventas
+    </button>
+    <button class="sb-navitem" id="tbtn-pubs" onclick="showPubsModule()">
+      <span class="nav-dot" style="background:#8c6cf0"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/></svg>
+      Publicaciones
+    </button>
+    <button class="sb-navitem" id="tbtn-pub" onclick="showPubModule()">
+      <span class="nav-dot" style="background:#a08cf7"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8h10M7 12h6"/></svg>
+      Publicidad ML
+    </button>
+    <button class="sb-navitem" id="tbtn-mkt" onclick="showMktModule()">
+      <span class="nav-dot" style="background:#4f8cff"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      Tendencias
+    </button>
+    <button class="sb-navitem" id="tbtn-cotizador" onclick="showCotizadorModule()">
+      <span class="nav-dot" style="background:#c0392b"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M9 9a3 3 0 0 1 3-1.5c1.7 0 3 1 3 2.5s-1.3 2.5-3 2.5-3 1-3 2.5 1.3 2.5 3 2.5a3 3 0 0 0 3-1.5"/></svg>
+      Cotizador
+    </button>
+  </div>
 
   <div class="src-area">
     <div class="src-head"><div class="src-dot ml"></div><span class="src-nm">Mercado Libre</span><span class="src-bd ml">ML</span></div>
@@ -4319,7 +4335,7 @@ async function drp(e,s){
 
 async function showVentasModule(){
   hideMainViews()
-  document.querySelectorAll('.tbtn').forEach(b=>b.style.outline='none')
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
   const btn=document.getElementById('tbtn-ventas')
   if(btn) btn.style.outline='2px solid #86efac'
 
@@ -5959,7 +5975,7 @@ function showPubModule(){
   hideMainViews()
   const pub  = document.getElementById('pub-module')
   if(pub)  pub.style.display  = 'block'
-  document.querySelectorAll('.tbtn').forEach(b => b.style.outline = 'none')
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b => b.style.outline = 'none')
   const btn = document.getElementById('tbtn-pub')
   if(btn) btn.style.outline = '2px solid #e9d5ff'
   loadPubDash()
@@ -6425,7 +6441,7 @@ let MKT_CHARTS = {}
 function showMktModule(){
   hideMainViews()
   document.getElementById('mkt-module').style.display='flex'
-  document.querySelectorAll('.tbtn').forEach(b=>b.style.outline='none')
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
   const btn=document.getElementById('tbtn-mkt')
   if(btn) btn.style.outline='2px solid #7dd3fc'
 }
@@ -6894,7 +6910,7 @@ function showPubsModule(){
   hideMainViews()
   const m=document.getElementById('pubs-module')
   if(m) m.style.display='flex'
-  document.querySelectorAll('.tbtn').forEach(b=>b.style.outline='none')
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
   const btn=document.getElementById('tbtn-pubs')
   if(btn) btn.style.outline='2px solid #c4b5fd'
   if(PUBS_DATA) renderPubsDash(PUBS_DATA)
@@ -7144,7 +7160,7 @@ function renderPubsCharts(d){
 function showCotizadorModule(){
   hideMainViews()
   document.getElementById('cotizador-module').style.display='flex'
-  document.querySelectorAll('.tbtn').forEach(b=>b.style.outline='none')
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
   const btn=document.getElementById('tbtn-cotizador')
   if(btn) btn.style.outline='2px solid #e8b4b4'
 }
