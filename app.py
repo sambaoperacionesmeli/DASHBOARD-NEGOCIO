@@ -5,11 +5,12 @@ Mercado Libre  |  Tienda Nube  |  Cualquier Excel/CSV
 Uso:  python app.py  →  http://127.0.0.1:7841
 Deps: pip install flask pandas openpyxl requests odfpy
 """
-import io, os, uuid, pickle, secrets, threading, webbrowser, traceback, re, math, csv
+import io, os, uuid, pickle, secrets, threading, webbrowser, traceback, re, math, csv, difflib, contextvars
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
 import pandas as pd
+import requests
 from flask import Flask, request, jsonify, session, redirect, url_for, Response
 
 PORT = int(os.environ.get("PORT", 7841))
@@ -17,81 +18,197 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 150 * 1024 * 1024
 
-# ── Login (usuario único) y persistencia en disco ───────────────────────────
-# DASHIFY_PASSWORD: contraseña para entrar al dashboard (obligatoria en producción).
+# ── Login (Google OAuth, multi-negocio) y persistencia en disco ─────────────
+# GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: credenciales de "Sign in with
+#   Google" (ver guía de Google Cloud Console). Sin estas dos, /login muestra
+#   en cambio un acceso directo de desarrollo (Tarea #5) para entrar como
+#   cualquier usuario ya autorizado, sin pasar por Google de verdad — sirve
+#   para probar en tu compu, NUNCA se activa solo si faltan por error en Render.
+# DASHIFY_MADRE_EMAILS: uno o más Gmail (separados por coma) que SIEMPRE van a
+#   poder entrar como cuenta madre (ven todos los negocios), aunque el
+#   registro de usuarios autorizados esté vacío o se corrompa — evita quedar
+#   bloqueado afuera del panel de admin.
 # DASHIFY_SECRET_KEY: clave para firmar la sesión (si no se define, se genera una
 #   al arrancar — sirve para probar local, pero en producción convine fijarla,
-#   porque si cambia, se cierran las sesiones abiertas).
+#   porque si cambia, se cierran las sesiones abiertas de todos los negocios).
 # DASHIFY_DATA_DIR: carpeta donde se guardan los datos cargados, para que no se
 #   pierdan al reiniciar el servidor. En Render, apuntar esto a un Disco
 #   persistente (por ej. /var/data) — si no, en cada deploy se borra.
 app.config["SECRET_KEY"] = os.environ.get("DASHIFY_SECRET_KEY") or secrets.token_hex(32)
-DASHIFY_PASSWORD = os.environ.get("DASHIFY_PASSWORD")  # None = login deshabilitado (uso local)
 
 # DATABASE_URL: si está definida (por ej. apuntando a un Postgres gratis de
-#   Supabase), los datos se guardan ahí — sobreviven aunque Render reinicie o
-#   borre el disco (en el plan free de Render el disco NO es persistente).
-#   Si no está definida, se guarda en un archivo local (sirve para probar en tu
-#   compu, pero en Render free se pierde en cada reinicio).
+#   Supabase), los datos de CADA NEGOCIO se guardan ahí por separado —
+#   sobreviven aunque Render reinicie o borre el disco (en el plan free de
+#   Render el disco NO es persistente). Si no está definida, cada negocio se
+#   guarda en su propio archivo local (sirve para probar en tu compu, pero en
+#   Render free se pierde en cada reinicio).
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 DATA_DIR = Path(os.environ.get("DASHIFY_DATA_DIR", "./dashify_data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-STATE_FILE = DATA_DIR / "dashify_state.pkl"
 
 
-# STORE: { sid: { name, source, df_raw, df, config } }
-# source: "ml" | "tn" | "custom"
-# config: { date_col, amount_col, qty_col, cat_col, cat2_col, label_col, ... }
-STORE = {}
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTI-NEGOCIO: cada uno de los stores de abajo (STORE, ML_STORE, TN_STORE,
+# FICHAS_STORE, COSTOS_STORE, PUB_STORE, PUBS_STORE) deja de ser UN dict
+# global compartido por todos, y pasa a ser un "proxy" que, en cada operación
+# ([], .get(), .update(), etc.), resuelve al dict real del NEGOCIO ACTIVO en
+# la request actual — usando contextvars (aísla por request/thread).
+#
+# Por qué no alcanza con "global X; X = {...}" en un before_request: gunicorn
+# corre esta app con varios threads (--workers 1 --threads 4), así que puede
+# haber requests de DOS negocios distintos ejecutándose al mismo tiempo en el
+# mismo proceso. Rebindear el nombre global directamente pisaría los datos de
+# un negocio con los de otro a mitad de camino. El proxy con contextvar evita
+# justamente eso: cada thread ve su propio negocio, sin pisarse.
+#
+# Gracias a este proxy, el resto del archivo (~120 lugares que hacen
+# STORE[sid]=..., ML_STORE.get("df"), sid in STORE, etc.) NO CAMBIA: siguen
+# funcionando exactamente igual, ahora aislados por negocio automáticamente.
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ── Store persistente para Mercado Libre (upsert por id_venta) ──────────────
-# Todas las planillas ML se fusionan en un único DataFrame acumulado.
-# La clave de deduplicación es id_venta ("# de venta").
-# Si la misma operación aparece en dos planillas, se conserva la fila más nueva.
-ML_STORE = {
-    "sid":     None,   # sid fijo reutilizado en STORE
-    "df":      None,   # DataFrame acumulado con todas las planillas
-    "config":  None,
-    "col_info":None,
-    "files":   [],     # historial de archivos cargados
-}
+_tenant_id_var: contextvars.ContextVar = contextvars.ContextVar("tenant_id", default=None)
 
-# ── Store persistente para Tienda Nube (upsert por id_venta = Número de orden) ──
-# Mismo esquema que ML_STORE: todas las planillas TN se fusionan en un único
-# DataFrame acumulado. Como un pedido puede tener varias líneas (una por
-# producto), el upsert reemplaza TODAS las filas de un "Número de orden" que
-# vuelve a aparecer en una planilla nueva (no solo una fila individual).
-TN_STORE = {
-    "sid":     None,
-    "df":      None,
-    "config":  None,
-    "col_info":None,
-    "files":   [],
-}
 
-# ── Store de Fichas Técnicas de ML ──────────────────────────────────────────
-# Mapeo { id_publicacion → categoria, sku → categoria, titulo_lower → categoria }
-# Construido desde la planilla de fichas técnicas (una hoja por categoría).
-FICHAS_STORE = {
-    "loaded": False,
-    "by_id":    {},   # "MLA123456" → "Shampoos y acondicionadores"
-    "by_sku":   {},   # "SKU001"    → "Shampoos y acondicionadores"
-    "by_title": {},   # "shampoo x" → "Shampoos y acondicionadores"
-    "categorias": [], # lista de categorías disponibles
-    "filename": None,
-}
+def _default_store_shapes():
+    """Forma inicial (vacía) de los 7 stores de un negocio nuevo. Se usa tanto
+    para crear un negocio desde cero como como referencia de qué claves tiene
+    cada store."""
+    return {
+        # STORE: { sid: { name, source, df_raw, df, config } }
+        # source: "ml" | "tn" | "custom"
+        # config: { date_col, amount_col, qty_col, cat_col, cat2_col, label_col, ... }
+        "STORE": {},
+
+        # ── Mercado Libre (upsert por id_venta) ──────────────────────────────
+        # Todas las planillas ML se fusionan en un único DataFrame acumulado.
+        # La clave de deduplicación es id_venta ("# de venta"). Si la misma
+        # operación aparece en dos planillas, se conserva la fila más nueva.
+        "ML_STORE": {
+            "sid":     None,   # sid fijo reutilizado en STORE
+            "df":      None,   # DataFrame acumulado con todas las planillas
+            "config":  None,
+            "col_info":None,
+            "files":   [],     # historial de archivos cargados
+        },
+
+        # ── Tienda Nube (upsert por id_venta = Número de orden) ──────────────
+        # Mismo esquema que ML_STORE. Como un pedido puede tener varias líneas
+        # (una por producto), el upsert reemplaza TODAS las filas de un
+        # "Número de orden" que vuelve a aparecer en una planilla nueva.
+        "TN_STORE": {
+            "sid":     None,
+            "df":      None,
+            "config":  None,
+            "col_info":None,
+            "files":   [],
+        },
+
+        # ── Fichas Técnicas de ML ─────────────────────────────────────────────
+        # Mapeo { id_publicacion → categoria, sku → categoria, titulo_lower → categoria }
+        "FICHAS_STORE": {
+            "loaded": False,
+            "by_id":    {},   # "MLA123456" → "Shampoos y acondicionadores"
+            "by_sku":   {},   # "SKU001"    → "Shampoos y acondicionadores"
+            "by_title": {},   # "shampoo x" → "Shampoos y acondicionadores"
+            "categorias": [], # lista de categorías disponibles
+            "filename": None,
+        },
+
+        # ── Costos de productos (para Rentabilidad) ──────────────────────────
+        # Mapeo SKU / título de producto → costo unitario + descripción.
+        "COSTOS_STORE": {
+            "loaded": False,
+            "by_sku":   {},   # "SKU001" → {"costo": 1234.5, "descripcion": "..."}
+            "by_title": {},   # "malbec reserva 750ml" → {"costo":..., "descripcion":...}
+            "total": 0,
+            "filename": None,
+        },
+
+        # ── Publicidad (ML Ads) ───────────────────────────────────────────────
+        "PUB_STORE": {
+            "campanias": None,   # DataFrame campañas
+            "anuncios":  None,   # DataFrame anuncios
+            "ventas_ads": None,  # DataFrame ventas por publicidad
+            "files":     [],     # archivos cargados
+        },
+
+        # ── Publicaciones (catálogo ML) ───────────────────────────────────────
+        "PUBS_STORE": {"df": None, "filename": None},
+    }
+
+
+_TENANTS: dict = {}           # tenant_id -> {store_name: {...}} (cache en memoria de este proceso)
+_tenants_lock = threading.Lock()
+
+
+def _get_tenant_bucket(tenant_id):
+    """Devuelve (creando o cargando desde la persistencia si hace falta) el
+    diccionario completo de stores de un negocio. Carga perezosa: un negocio
+    que todavía no fue tocado en este proceso no ocupa memoria."""
+    bucket = _TENANTS.get(tenant_id)
+    if bucket is not None:
+        return bucket
+    with _tenants_lock:
+        bucket = _TENANTS.get(tenant_id)
+        if bucket is None:
+            loaded = _load_tenant_from_db(tenant_id)
+            bucket = loaded if loaded is not None else _default_store_shapes()
+            # Por si un negocio persistido en una versión anterior no tiene
+            # todavía alguna clave nueva (ej. PUBS_STORE, agregado recién a la
+            # persistencia): completar con la forma default sin pisar lo real.
+            for k, v in _default_store_shapes().items():
+                bucket.setdefault(k, v)
+            _TENANTS[tenant_id] = bucket
+        return bucket
+
+
+class _TenantScopedStore:
+    """Reemplazo 'drop-in' de un dict global: cada operación resuelve, en el
+    momento, al store real del negocio activo en la request actual (vía
+    contextvars). El resto del código sigue escribiendo STORE[x], ML_STORE.get(x),
+    etc. sin enterarse de que por debajo cambia según quién está logueado."""
+    __slots__ = ("_name",)
+
+    def __init__(self, name):
+        self._name = name
+
+    def _dict(self):
+        tid = _tenant_id_var.get()
+        if tid is None:
+            raise RuntimeError(
+                f"{self._name} accedido sin negocio activo — falta pasar por "
+                f"before_request / _resolve_tenant (¿ruta nueva que no pasa por ahí?)"
+            )
+        return _get_tenant_bucket(tid)[self._name]
+
+    def __getitem__(self, k): return self._dict()[k]
+    def __setitem__(self, k, v): self._dict()[k] = v
+    def __delitem__(self, k): del self._dict()[k]
+    def __contains__(self, k): return k in self._dict()
+    def __len__(self): return len(self._dict())
+    def __iter__(self): return iter(self._dict())
+    def __bool__(self): return bool(self._dict())
+    def __repr__(self): return f"<_TenantScopedStore {self._name} -> {self._dict()!r}>"
+    def get(self, k, default=None): return self._dict().get(k, default)
+    def update(self, *a, **kw): return self._dict().update(*a, **kw)
+    def pop(self, k, *default): return self._dict().pop(k, *default)
+    def setdefault(self, k, default=None): return self._dict().setdefault(k, default)
+    def keys(self): return self._dict().keys()
+    def values(self): return self._dict().values()
+    def items(self): return self._dict().items()
+
+
+STORE        = _TenantScopedStore("STORE")
+ML_STORE     = _TenantScopedStore("ML_STORE")
+TN_STORE     = _TenantScopedStore("TN_STORE")
+FICHAS_STORE = _TenantScopedStore("FICHAS_STORE")
+COSTOS_STORE = _TenantScopedStore("COSTOS_STORE")
+PUB_STORE    = _TenantScopedStore("PUB_STORE")
+PUBS_STORE   = _TenantScopedStore("PUBS_STORE")
 
 MESES = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
          "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
-
-# ── Store de Publicidad (ML Ads) ─────────────────────────────────────────────
-PUB_STORE = {
-    "campanias": None,   # DataFrame campañas
-    "anuncios":  None,   # DataFrame anuncios
-    "ventas_ads": None,  # DataFrame ventas por publicidad
-    "files":     [],     # archivos cargados
-}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HELPERS
@@ -102,6 +219,15 @@ def _str(v):
     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
     s = str(v).strip()
     return None if s in ("","nan","None","NaN","<NA>","none","-","N/A","n/a") else s
+
+def _norm_txt(v):
+    """Normaliza texto para comparar productos: minúsculas, sin tildes/símbolos, espacios simples."""
+    import unicodedata
+    s = str(v or "").strip().lower()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 def _num(v):
     if v is None: return None
@@ -1261,14 +1387,25 @@ def _get_combined(sids):
 def ok(d): return jsonify({"ok":True,**d})
 def err(m,c=400): return jsonify({"ok":False,"error":str(m)}),c
 
-# ── Persistencia: guardar/cargar todo el estado (STORE, ML_STORE, etc.) ─────
+# ── Persistencia por negocio: un blob pickle por tenant_id ──────────────────
+# Cada negocio se guarda y se carga por separado (nunca "todo el proceso
+# junto" como en la versión de un solo usuario). Postgres: una fila por
+# negocio en dashify_tenant_state (id=slug del negocio, o '__admin__' para el
+# registro de usuarios autorizados de la Tarea #4). Sin DATABASE_URL (uso
+# local): un archivo .pkl por negocio en DATA_DIR.
+#
+# Nota: es una tabla NUEVA (dashify_tenant_state), no la vieja dashify_state
+# de la versión de un solo usuario — evita tener que migrar/alterar esa tabla
+# (que tenía id INTEGER, no serviría para slugs de texto) y, tal como pidió
+# Santi, no hace falta migrar los datos viejos: la tabla/fila anterior queda
+# simplemente sin usar.
 def _get_pg_conn():
     import psycopg2
     conn = psycopg2.connect(DATABASE_URL)
     with conn.cursor() as cur:
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS dashify_state (
-                id INTEGER PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS dashify_tenant_state (
+                id TEXT PRIMARY KEY,
                 blob BYTEA NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
@@ -1276,138 +1413,580 @@ def _get_pg_conn():
     conn.commit()
     return conn
 
-def save_state():
-    blob = pickle.dumps({
-        "STORE": STORE, "ML_STORE": ML_STORE, "TN_STORE": TN_STORE,
-        "FICHAS_STORE": FICHAS_STORE, "PUB_STORE": PUB_STORE,
-    })
+
+def _tenant_file(tenant_id):
+    """Ruta del pickle local de UN negocio (fallback cuando no hay
+    DATABASE_URL — sirve para probar en la compu). El id se "sanitiza" para
+    que sirva como nombre de archivo aunque en el futuro sea, por ejemplo,
+    un slug derivado de un email."""
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(tenant_id)) or "_"
+    return DATA_DIR / f"tenant_{safe}.pkl"
+
+
+def _load_tenant_from_db(tenant_id):
+    """Carga el bucket completo de stores (STORE, ML_STORE, ..., PUBS_STORE)
+    de UN negocio desde la persistencia. None si el negocio todavía no tiene
+    nada guardado (negocio nuevo) — en ese caso _get_tenant_bucket() lo
+    arranca vacío con _default_store_shapes()."""
     try:
+        blob = None
+        if DATABASE_URL:
+            conn = _get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT blob FROM dashify_tenant_state WHERE id = %s",
+                        (str(tenant_id),),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        blob = bytes(row[0])
+            finally:
+                conn.close()
+        else:
+            fpath = _tenant_file(tenant_id)
+            if fpath.exists():
+                blob = fpath.read_bytes()
+        if not blob:
+            return None
+        return pickle.loads(blob)
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+def save_tenant_state(tenant_id):
+    """Guarda el bucket completo de UN negocio. Importante: lo que se
+    picklea es el DICT REAL de datos tal cual vive en _TENANTS — nunca los
+    objetos _TenantScopedStore (STORE, ML_STORE, etc.), que son solo el
+    proxy de acceso del negocio activo de la request, no los datos en sí."""
+    if not tenant_id:
+        return
+    bucket = _TENANTS.get(tenant_id)
+    if bucket is None:
+        return  # nada tocado todavía en este proceso para este negocio — no hay nada que guardar
+    try:
+        blob = pickle.dumps(bucket)
         if DATABASE_URL:
             import psycopg2
             conn = _get_pg_conn()
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO dashify_state (id, blob, updated_at) VALUES (1, %s, now()) "
+                        "INSERT INTO dashify_tenant_state (id, blob, updated_at) VALUES (%s, %s, now()) "
                         "ON CONFLICT (id) DO UPDATE SET blob = EXCLUDED.blob, updated_at = now()",
-                        (psycopg2.Binary(blob),),
+                        (str(tenant_id), psycopg2.Binary(blob)),
                     )
                 conn.commit()
             finally:
                 conn.close()
         else:
-            with open(STATE_FILE, "wb") as fh:
+            with open(_tenant_file(tenant_id), "wb") as fh:
                 fh.write(blob)
     except Exception:
         traceback.print_exc()
 
-def load_state():
-    try:
-        blob = None
-        if DATABASE_URL:
-            import psycopg2
-            conn = _get_pg_conn()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT blob FROM dashify_state WHERE id = 1")
-                    row = cur.fetchone()
-                    if row: blob = bytes(row[0])
-            finally:
-                conn.close()
-            source_desc = "Postgres (DATABASE_URL)"
-        else:
-            if STATE_FILE.exists():
-                blob = STATE_FILE.read_bytes()
-            source_desc = str(STATE_FILE)
-        if not blob:
-            print(f"[Dashify] Sin estado previo guardado ({source_desc}) — arranca vacío.")
-            return
-        data = pickle.loads(blob)
-        STORE.update(data.get("STORE", {}))
-        ML_STORE.update(data.get("ML_STORE", {}))
-        TN_STORE.update(data.get("TN_STORE", {}))
-        FICHAS_STORE.update(data.get("FICHAS_STORE", {}))
-        PUB_STORE.update(data.get("PUB_STORE", {}))
-        print(f"[Dashify] Estado cargado desde {source_desc} "
-              f"({len(STORE)} fuente(s), {len(ML_STORE.get('files') or [])} archivo(s) ML, "
-              f"{len(TN_STORE.get('files') or [])} archivo(s) TN)")
-    except Exception:
-        traceback.print_exc()
-
-load_state()  # cargar datos guardados apenas arranca el proceso (funciona con gunicorn también)
 
 @app.after_request
 def _persist_after_write(resp):
     try:
         if request.method in ("POST", "DELETE") and request.path.startswith("/api/") \
            and resp.status_code < 400:
-            save_state()
+            save_tenant_state(_tenant_id_var.get())
     except Exception:
         traceback.print_exc()
     return resp
 
-# ── Login (protege todo excepto /login y los assets) ────────────────────────
-LOGIN_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dashify — Ingresar</title>
+# ═══════════════════════════════════════════════════════════════════════════
+# REGISTRO DE NEGOCIOS AUTORIZADOS (multi-negocio)
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTHORIZED_USERS: { email (normalizado, minúsculas) -> {
+#     "tenant_id":     slug del negocio (clave de _TENANTS / persistencia),
+#     "business_name": nombre para mostrar,
+#     "is_madre":      True si esta cuenta puede ver TODOS los negocios,
+# }}
+# Vive a nivel de APP (no es por-negocio como los 7 stores) — Santi da de
+# alta cada email a mano desde el panel de admin (Tarea #6); nadie se
+# autoregistra. Se persiste bajo el id especial '__admin__' en la misma
+# tabla/mecanismo que los negocios (dashify_tenant_state / pickle local).
+AUTHORIZED_USERS: dict = {}
+_authorized_users_lock = threading.Lock()
+ADMIN_REGISTRY_ID = "__admin__"
+
+
+def _norm_email(email):
+    return str(email or "").strip().lower()
+
+
+def _load_authorized_users():
+    """Carga el registro de usuarios autorizados desde la persistencia. Si
+    todavía no hay nada guardado (primer arranque), queda vacío — lo llena
+    _bootstrap_madre_emails() a partir de DASHIFY_MADRE_EMAILS."""
+    global AUTHORIZED_USERS
+    try:
+        blob = None
+        if DATABASE_URL:
+            conn = _get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT blob FROM dashify_tenant_state WHERE id = %s",
+                        (ADMIN_REGISTRY_ID,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        blob = bytes(row[0])
+            finally:
+                conn.close()
+        else:
+            fpath = _tenant_file(ADMIN_REGISTRY_ID)
+            if fpath.exists():
+                blob = fpath.read_bytes()
+        if blob:
+            data = pickle.loads(blob)
+            if isinstance(data, dict):
+                AUTHORIZED_USERS = data
+    except Exception:
+        traceback.print_exc()
+
+
+def _save_authorized_users():
+    try:
+        blob = pickle.dumps(AUTHORIZED_USERS)
+        if DATABASE_URL:
+            import psycopg2
+            conn = _get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO dashify_tenant_state (id, blob, updated_at) VALUES (%s, %s, now()) "
+                        "ON CONFLICT (id) DO UPDATE SET blob = EXCLUDED.blob, updated_at = now()",
+                        (ADMIN_REGISTRY_ID, psycopg2.Binary(blob)),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+        else:
+            with open(_tenant_file(ADMIN_REGISTRY_ID), "wb") as fh:
+                fh.write(blob)
+    except Exception:
+        traceback.print_exc()
+
+
+def _slugify_tenant(business_name, fallback_seed=""):
+    """Genera un tenant_id (slug) único a partir del nombre del negocio (o,
+    si no hay nombre, de fallback_seed — típicamente el email)."""
+    base = re.sub(r"[^a-z0-9]+", "-", (business_name or "").strip().lower()).strip("-")
+    if not base:
+        base = re.sub(r"[^a-z0-9]+", "-", (fallback_seed or "").strip().lower()).strip("-")
+    base = base or "negocio"
+    existing = {u.get("tenant_id") for u in AUTHORIZED_USERS.values()}
+    slug = base
+    n = 2
+    while slug in existing:
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
+
+
+def _bootstrap_madre_emails():
+    """Al arrancar, asegura que los emails de DASHIFY_MADRE_EMAILS (uno o
+    más, separados por coma) estén SIEMPRE autorizados como cuenta madre —
+    así nunca se puede quedar bloqueado afuera del panel de admin, aunque el
+    registro persistido esté vacío o corrupto."""
+    raw = os.environ.get("DASHIFY_MADRE_EMAILS", "")
+    emails = [_norm_email(e) for e in raw.split(",") if e.strip()]
+    changed = False
+    with _authorized_users_lock:
+        for email in emails:
+            cur = AUTHORIZED_USERS.get(email)
+            if cur is None or not cur.get("is_madre"):
+                AUTHORIZED_USERS[email] = {
+                    "tenant_id": (cur or {}).get("tenant_id") or "__madre__",
+                    "business_name": (cur or {}).get("business_name") or "Cuenta madre",
+                    "is_madre": True,
+                }
+                changed = True
+        if changed:
+            _save_authorized_users()
+
+
+_load_authorized_users()
+_bootstrap_madre_emails()
+
+# ── Login (Google OAuth por negocio + cuenta madre) ──────────────────────────
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+# Por si la app corre atrás de un proxy que le esconde el host real (no hace
+# falta en Render normalmente) — si no está seteada, se calcula de la propia
+# request (request.host_url).
+GOOGLE_REDIRECT_BASE = os.environ.get("DASHIFY_OAUTH_REDIRECT_BASE")
+
+MADRE_TENANT_ID = "__madre__"  # negocio "propio" de una cuenta madre sin negocio real (vacío, hasta que elija uno con el selector)
+
+
+def _login_page_html(error=""):
+    """Página de /login: si hay credenciales de Google configuradas, muestra
+    "Continuar con Google"; si no (uso local sin credenciales todavía),
+    muestra un acceso directo de desarrollo para cada usuario ya autorizado
+    (Tarea #5, paso "atajo de desarrollo local")."""
+    err_html = f'<div class="err">{error}</div>' if error else ""
+    if GOOGLE_CLIENT_ID:
+        body = f'''
+  {err_html}
+  <a class="glogin" href="/auth/google/start">
+    <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.9 2.4 30.4 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.3 13 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.2-.4-4.7H24v9h12.7c-.5 3-2.2 5.5-4.7 7.2l7.5 5.8c4.4-4 6.9-10 6.9-17.3z"/><path fill="#FBBC05" d="M10.5 19.3l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.8l7.9-6.1c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7z"/><path fill="#34A853" d="M24 48c6.4 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.4 0-11.7-3.5-13.6-8.9l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
+    Continuar con Google
+  </a>'''
+    elif AUTHORIZED_USERS:
+        opts = "".join(
+            f'<button class="devuser" type="submit" name="email" value="{email}">'
+            f'{u.get("business_name") or email}{" 👑" if u.get("is_madre") else ""}'
+            f'<span class="dsub">{email}</span></button>'
+            for email, u in sorted(AUTHORIZED_USERS.items())
+        )
+        body = f'''
+  {err_html}
+  <div class="devnote">Sin credenciales de Google configuradas todavía (uso local) — entrá como uno de los usuarios ya autorizados:</div>
+  <form method="POST" action="/auth/dev/login">{opts}</form>'''
+    else:
+        body = f'''
+  {err_html}
+  <div class="devnote">Sin credenciales de Google Y sin usuarios autorizados todavía.<br><br>
+  Para probar en local, definí la variable de entorno <code>DASHIFY_MADRE_EMAILS</code> con tu Gmail
+  y reiniciá — vas a poder entrar como cuenta madre desde acá.</div>'''
+    return f'''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dashify — Ingresar</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-  background:#0c1220;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-.box{background:#141b2e;border:1px solid #232d45;border-radius:14px;padding:32px;width:280px}
-h1{color:#fff;font-size:18px;margin:0 0 18px}
-input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a3552;background:#0c1220;
-  color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:12px}
-button{width:100%;padding:10px;border:none;border-radius:8px;background:#16a34a;color:#fff;
-  font-weight:600;font-size:14px;cursor:pointer}
-.err{color:#f87171;font-size:12px;margin-bottom:10px}
+body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:#0c1220;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
+.box{{background:#141b2e;border:1px solid #232d45;border-radius:14px;padding:32px;width:320px}}
+h1{{color:#fff;font-size:18px;margin:0 0 18px}}
+.err{{color:#f87171;font-size:12px;margin-bottom:10px}}
+.glogin{{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:11px;
+  border-radius:8px;background:#fff;color:#1f1f1f;font-weight:600;font-size:14px;text-decoration:none;
+  box-sizing:border-box}}
+.glogin:hover{{background:#f3f3f3}}
+.devnote{{color:#9aa3c0;font-size:12px;line-height:1.6;margin-bottom:14px}}
+.devnote code{{background:#0c1220;padding:1px 5px;border-radius:4px}}
+.devuser{{display:flex;flex-direction:column;align-items:flex-start;width:100%;padding:9px 12px;
+  border-radius:8px;border:1px solid #2a3552;background:#0c1220;color:#fff;font-size:13px;
+  font-weight:600;cursor:pointer;box-sizing:border-box;margin-bottom:8px;text-align:left}}
+.devuser:hover{{background:#1a2338}}
+.devuser .dsub{{font-weight:400;font-size:11px;color:#6b7699}}
 </style></head><body>
-<form class="box" method="POST">
+<div class="box">
   <h1>📊 Dashify</h1>
-  __ERROR__
-  <input type="password" name="password" placeholder="Contraseña" autofocus>
-  <button type="submit">Ingresar</button>
-</form>
-</body></html>"""
+  {body}
+</div>
+</body></html>'''
+
 
 def login_required(view):
     @wraps(view)
     def wrapped(*a, **kw):
-        if DASHIFY_PASSWORD and not session.get("auth"):
+        if not session.get("user_email"):
             if request.path.startswith("/api/"):
                 return jsonify({"ok": False, "error": "No autenticado"}), 401
             return redirect(url_for("login"))
         return view(*a, **kw)
     return wrapped
 
-@app.route("/login", methods=["GET", "POST"])
+
+def madre_required(view):
+    @wraps(view)
+    def wrapped(*a, **kw):
+        user = AUTHORIZED_USERS.get(_norm_email(session.get("user_email")))
+        if not user or not user.get("is_madre"):
+            return jsonify({"ok": False, "error": "Solo la cuenta madre puede hacer esto"}), 403
+        return view(*a, **kw)
+    return wrapped
+
+
+@app.route("/login", methods=["GET"])
 def login():
-    if not DASHIFY_PASSWORD:
-        session["auth"] = True
+    if session.get("user_email"):
         return redirect(url_for("index"))
-    error = ""
-    if request.method == "POST":
-        if request.form.get("password") == DASHIFY_PASSWORD:
-            session["auth"] = True
-            session.permanent = True
-            return redirect(url_for("index"))
-        error = '<div class="err">Contraseña incorrecta</div>'
-    return LOGIN_PAGE.replace("__ERROR__", error)
+    error = request.args.get("error", "")
+    return _login_page_html(error)
+
+
+@app.route("/auth/dev/login", methods=["POST"])
+def auth_dev_login():
+    """Atajo SOLO para desarrollo local sin credenciales de Google todavía
+    (Tarea #5, paso 1 del login). Deja de existir en la práctica apenas se
+    configura GOOGLE_CLIENT_ID: ahí /login ya ni siquiera muestra esta
+    opción, y esta ruta la rechaza igual por las dudas."""
+    if GOOGLE_CLIENT_ID:
+        return redirect(url_for("login"))
+    email = _norm_email(request.form.get("email"))
+    if email not in AUTHORIZED_USERS:
+        return redirect(url_for("login", error="Usuario no autorizado"))
+    session.clear()
+    session["user_email"] = email
+    session.permanent = True
+    return redirect(url_for("index"))
+
+
+@app.route("/auth/google/start")
+def auth_google_start():
+    if not GOOGLE_CLIENT_ID:
+        return redirect(url_for("login"))
+    state = secrets.token_urlsafe(24)
+    session["oauth_state"] = state
+    redirect_uri = (GOOGLE_REDIRECT_BASE or request.host_url).rstrip("/") + "/auth/google/callback"
+    from urllib.parse import urlencode
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    }
+    return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
+
+
+@app.route("/auth/google/callback")
+def auth_google_callback():
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return redirect(url_for("login"))
+    state = request.args.get("state", "")
+    if not state or state != session.get("oauth_state"):
+        return redirect(url_for("login", error="Sesión de login inválida o expirada, probá de nuevo"))
+    session.pop("oauth_state", None)
+    code = request.args.get("code")
+    if not code:
+        return redirect(url_for("login", error="Google no envió el código de autorización"))
+    redirect_uri = (GOOGLE_REDIRECT_BASE or request.host_url).rstrip("/") + "/auth/google/callback"
+    try:
+        tok_resp = requests.post("https://oauth2.googleapis.com/token", data={
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }, timeout=15)
+        tok_resp.raise_for_status()
+        access_token = tok_resp.json().get("access_token")
+        if not access_token:
+            return redirect(url_for("login", error="No se pudo validar con Google"))
+        info_resp = requests.get("https://www.googleapis.com/oauth2/v3/userinfo",
+                                  headers={"Authorization": f"Bearer {access_token}"}, timeout=15)
+        info_resp.raise_for_status()
+        info = info_resp.json()
+    except Exception:
+        traceback.print_exc()
+        return redirect(url_for("login", error="No se pudo conectar con Google, probá de nuevo"))
+
+    if not info.get("email_verified", info.get("verified_email", False)):
+        return redirect(url_for("login", error="Tu email de Google no está verificado"))
+    email = _norm_email(info.get("email"))
+    if email not in AUTHORIZED_USERS:
+        return redirect(url_for("login", error=f"{email} no está autorizado — contactá a We Sell"))
+
+    session.clear()
+    session["user_email"] = email
+    session.permanent = True
+    return redirect(url_for("index"))
+
 
 @app.route("/logout")
 def logout():
-    session.pop("auth", None)
+    session.clear()
     return redirect(url_for("login"))
+
 
 @app.before_request
 def _require_login():
-    if not DASHIFY_PASSWORD:
-        return
-    open_paths = ("/login", "/logout")
+    open_paths = ("/login", "/logout", "/auth/google/start", "/auth/google/callback", "/auth/dev/login")
     if request.path in open_paths:
         return
-    if not session.get("auth"):
+    if not session.get("user_email"):
         if request.path.startswith("/api/"):
             return jsonify({"ok": False, "error": "No autenticado"}), 401
         return redirect(url_for("login"))
+
+
+@app.before_request
+def _resolve_tenant():
+    """Resuelve el negocio activo de esta request: el propio del usuario
+    logueado, o — si es cuenta madre y está "mirando" otro negocio a través
+    del selector de negocio (Tarea #6) — ese otro negocio."""
+    email = _norm_email(session.get("user_email"))
+    if not email:
+        return  # ruta abierta (login/logout/oauth) — antes de _require_login en el orden de antes, no hace falta tenant
+    user = AUTHORIZED_USERS.get(email)
+    if not user:
+        # Cuenta deautorizada mientras tenía la sesión abierta — cerrar sesión.
+        session.clear()
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "Tu cuenta ya no está autorizada"}), 401
+        return redirect(url_for("login"))
+
+    own_tenant = user.get("tenant_id") or MADRE_TENANT_ID
+    active = own_tenant
+    if user.get("is_madre"):
+        viewing = session.get("viewing_tenant_id")
+        if viewing and any(u.get("tenant_id") == viewing for u in AUTHORIZED_USERS.values()):
+            active = viewing
+    _tenant_id_var.set(active)
+
+
+@app.route("/api/whoami")
+def api_whoami():
+    email = _norm_email(session.get("user_email"))
+    user = AUTHORIZED_USERS.get(email) or {}
+    is_madre = bool(user.get("is_madre"))
+    resp = {
+        "email": email,
+        "business_name": user.get("business_name") or email,
+        "is_madre": is_madre,
+        "tenant_id": user.get("tenant_id") or MADRE_TENANT_ID,
+        "viewing_tenant_id": _tenant_id_var.get(),
+    }
+    if is_madre:
+        resp["negocios"] = sorted(
+            (
+                {"tenant_id": u["tenant_id"], "business_name": u.get("business_name") or e}
+                for e, u in AUTHORIZED_USERS.items()
+                if not u.get("is_madre") and u.get("tenant_id")
+            ),
+            key=lambda x: x["business_name"].lower(),
+        )
+    return ok(resp)
+
+
+# ── Panel de administración (solo cuenta madre) ──────────────────────────────
+@app.route("/api/admin/users", methods=["GET"])
+@madre_required
+def api_admin_users_list():
+    negocios = sorted(
+        (
+            {"email": e, "business_name": u.get("business_name") or e,
+             "is_madre": bool(u.get("is_madre")), "tenant_id": u.get("tenant_id")}
+            for e, u in AUTHORIZED_USERS.items()
+        ),
+        key=lambda x: (not x["is_madre"], (x["business_name"] or "").lower()),
+    )
+    return ok({"usuarios": negocios})
+
+
+@app.route("/api/admin/users", methods=["POST"])
+@madre_required
+def api_admin_users_create():
+    data = request.json or {}
+    email = _norm_email(data.get("email"))
+    business_name = _str(data.get("business_name")) or email
+    if not email or "@" not in email:
+        return err("Email inválido.")
+    with _authorized_users_lock:
+        existing = AUTHORIZED_USERS.get(email)
+        if existing:
+            if existing.get("is_madre"):
+                return err("Esa cuenta ya es la cuenta madre — no se puede dar de alta como negocio.")
+            existing["business_name"] = business_name
+            tenant_id = existing["tenant_id"]
+        else:
+            tenant_id = _slugify_tenant(business_name, fallback_seed=email)
+            AUTHORIZED_USERS[email] = {
+                "tenant_id": tenant_id,
+                "business_name": business_name,
+                "is_madre": False,
+            }
+        _save_authorized_users()
+    return ok({"email": email, "business_name": business_name, "tenant_id": tenant_id})
+
+
+@app.route("/api/admin/users/<path:email>", methods=["DELETE"])
+@madre_required
+def api_admin_users_delete(email):
+    email = _norm_email(email)
+    with _authorized_users_lock:
+        user = AUTHORIZED_USERS.get(email)
+        if not user:
+            return err("Ese email no está autorizado.", 404)
+        if user.get("is_madre"):
+            return err("No se puede quitar acceso a una cuenta madre desde acá (se controla con la variable de entorno DASHIFY_MADRE_EMAILS).")
+        del AUTHORIZED_USERS[email]
+        _save_authorized_users()
+    # Los datos del negocio (STORE, ventas, costos, etc.) NO se borran — solo
+    # se revoca el acceso de este email. Si se lo vuelve a autorizar más
+    # adelante (mismo u otro email apuntando al mismo tenant_id) los datos
+    # siguen ahí.
+    return ok({"deleted": email})
+
+
+@app.route("/api/admin/switch_tenant", methods=["POST"])
+@madre_required
+def api_admin_switch_tenant():
+    data = request.json or {}
+    tenant_id = _str(data.get("tenant_id")) or ""
+    if not tenant_id or tenant_id == MADRE_TENANT_ID:
+        session.pop("viewing_tenant_id", None)
+        return ok({"viewing_tenant_id": None})
+    valid = any(u.get("tenant_id") == tenant_id and not u.get("is_madre") for u in AUTHORIZED_USERS.values())
+    if not valid:
+        return err("Ese negocio no existe o no está autorizado.", 404)
+    session["viewing_tenant_id"] = tenant_id
+    return ok({"viewing_tenant_id": tenant_id})
+
+
+@app.route("/api/admin/vista_general", methods=["GET"])
+@madre_required
+def api_admin_vista_general():
+    """Métricas combinadas de TODOS los negocios autorizados (menos la
+    cuenta madre), reutilizando _get_combined()/metricas() — las mismas
+    funciones que ya usa /api/dashboard para un negocio — recorridas una vez
+    por negocio. No cambia el negocio activo de la request real: guarda y
+    restaura _tenant_id_var alrededor de cada negocio."""
+    negocios_registro = [
+        {"email": e, "business_name": u.get("business_name") or e, "tenant_id": u["tenant_id"]}
+        for e, u in AUTHORIZED_USERS.items()
+        if not u.get("is_madre") and u.get("tenant_id")
+    ]
+
+    resultado = []
+    combined_frames = []
+    tok_outer = _tenant_id_var.get()
+    try:
+        for neg in negocios_registro:
+            tok = _tenant_id_var.set(neg["tenant_id"])
+            try:
+                sids = list(STORE.keys())
+                df = _get_combined(sids) if sids else pd.DataFrame()
+            finally:
+                _tenant_id_var.reset(tok)
+            m = metricas(df)
+            resultado.append({
+                "tenant_id":     neg["tenant_id"],
+                "business_name": neg["business_name"],
+                "email":         neg["email"],
+                "metricas":      m,
+            })
+            if not df.empty:
+                df2 = df.copy()
+                df2["_negocio"] = neg["business_name"]
+                combined_frames.append(df2)
+    finally:
+        _tenant_id_var.set(tok_outer)  # restaurar el negocio activo real de esta request (la propia madre)
+
+    combinado = pd.concat(combined_frames, ignore_index=True) if combined_frames else pd.DataFrame()
+    metricas_combinadas = metricas(combinado)
+    por_negocio = sorted(
+        ({"label": r["business_name"], "ingresos": r["metricas"]["ingresos"],
+          "n_ventas": r["metricas"]["n_ventas"]} for r in resultado),
+        key=lambda x: -x["ingresos"],
+    )
+
+    return ok({
+        "negocios":            resultado,
+        "metricas_combinadas": metricas_combinadas,
+        "por_negocio":         por_negocio,
+        "por_fuente":          grp(combinado, "fuente") if "fuente" in combinado.columns else [],
+        "total_negocios":      len(negocios_registro),
+    })
+
 
 @app.route("/")
 @login_required
@@ -1660,6 +2239,205 @@ def api_upload_fichas():
             "total_titles": len(result["by_title"]),
             "enriched_rows": 0,
         })
+    except Exception as e:
+        traceback.print_exc(); return err(str(e))
+
+@app.route("/api/cotizador/sync_costos", methods=["POST"])
+def api_cotizador_sync_costos():
+    """
+    Recibe la lista de productos cargados en el Cotizador (nombre + costo final,
+    ya con IVA aplicado si correspondía) y la usa como fuente de costos para
+    Rentabilidad. Se llama automáticamente cada vez que cambia la lista de
+    productos del Cotizador (alta, baja, edición, importación).
+
+    Nota: el Cotizador vive solo en el navegador (no persiste su lista entre
+    recargas de página), así que una lista vacía casi siempre significa "recién
+    se abrió la página", no "el usuario quiere borrar los costos". Por eso una
+    lista vacía nunca pisa los costos ya guardados: se ignora sin error.
+    """
+    data = request.json or {}
+    productos = data.get("productos", [])
+    if not productos:
+        return ok({"total": COSTOS_STORE.get("total", 0), "skipped": True})
+    try:
+        by_title = {}
+        by_sku = {}
+        for p in productos:
+            nombre = _str(p.get("nombre"))
+            if not nombre:
+                continue
+            try:
+                costo = float(p.get("costo"))
+            except (TypeError, ValueError):
+                continue
+            if costo <= 0:
+                continue
+            key = _norm_txt(nombre)
+            if not key:
+                continue
+            entry = {"costo": costo, "descripcion": nombre}
+            by_title[key] = entry
+            sku_raw = _str(p.get("sku"))
+            if sku_raw:
+                sku_key = sku_raw.strip().upper()
+                if sku_key:
+                    by_sku[sku_key] = entry
+        COSTOS_STORE["by_title"] = by_title
+        COSTOS_STORE["by_sku"]   = by_sku
+        COSTOS_STORE["total"]    = len(by_title)
+        COSTOS_STORE["filename"] = "Cotizador (sincronizado)"
+        COSTOS_STORE["loaded"]   = len(by_title) > 0
+        return ok({"total": len(by_title), "total_sku": len(by_sku)})
+    except Exception as e:
+        traceback.print_exc(); return err(str(e))
+
+@app.route("/api/rentabilidad", methods=["GET"])
+def api_rentabilidad():
+    """
+    Cruza las ventas acumuladas (ML + TN, combinadas cuando un mismo producto
+    aparece en ambas) con los costos cargados en el Cotizador (COSTOS_STORE)
+    para calcular la rentabilidad real del negocio, producto por producto.
+    Match por título normalizado; si no hay match exacto se usa fuzzy matching
+    (difflib), mismo criterio que el agente de Rentabilidad de la Sala IA:
+    ≥0.75 automático, 0.55–0.75 "revisar", debajo "sin costo".
+    """
+    try:
+        total_ml = int(len(ML_STORE["df"])) if ML_STORE["df"] is not None else 0
+        total_tn = int(len(TN_STORE["df"])) if TN_STORE["df"] is not None else 0
+
+        if not COSTOS_STORE.get("by_title"):
+            return ok({"tiene_costos": False, "productos": [], "kpis": None,
+                       "total_ml": total_ml, "total_tn": total_tn})
+
+        frames = []
+        for store in (ML_STORE, TN_STORE):
+            df = store.get("df")
+            if df is not None and len(df) and "publicacion" in df.columns:
+                sub = df.copy()
+                if "estado" in sub.columns:
+                    sub = sub[~sub["estado"].isin(["Cancelado", "Reembolsado", "Reembolso parcial"])]
+                frames.append(sub)
+
+        if not frames:
+            return ok({"tiene_costos": True, "productos": [], "kpis": None,
+                       "total_ml": total_ml, "total_tn": total_tn})
+
+        df_all = pd.concat(frames, ignore_index=True, sort=False)
+        for col in ("ingresos", "unidades", "costo"):
+            if col not in df_all.columns:
+                df_all[col] = 0
+        df_all["ingresos"] = pd.to_numeric(df_all["ingresos"], errors="coerce").fillna(0)
+        df_all["unidades"] = pd.to_numeric(df_all["unidades"], errors="coerce").fillna(0)
+        df_all["costo"]    = pd.to_numeric(df_all["costo"], errors="coerce").fillna(0)
+        df_all["_titulo_norm"] = df_all["publicacion"].apply(_norm_txt)
+        df_all = df_all[df_all["_titulo_norm"] != ""]
+
+        if not len(df_all):
+            return ok({"tiene_costos": True, "productos": [], "kpis": None,
+                       "total_ml": total_ml, "total_tn": total_tn})
+
+        if "sku" in df_all.columns:
+            df_all["_sku_norm"] = df_all["sku"].apply(lambda v: str(v).strip().upper() if v not in (None, "") else "")
+        else:
+            df_all["_sku_norm"] = ""
+
+        # sku representativo del grupo: el primer SKU no vacío entre las ventas de ese título
+        def _primer_sku(serie):
+            for v in serie:
+                if v:
+                    return v
+            return ""
+
+        agg = df_all.groupby("_titulo_norm").agg(
+            titulo=("publicacion", "first"),
+            sku=("_sku_norm", _primer_sku),
+            ingresos=("ingresos", "sum"),
+            unidades=("unidades", "sum"),
+            costo_plataforma=("costo", "sum"),
+            n_ventas=("_titulo_norm", "count"),
+        ).reset_index()
+
+        costo_keys = list(COSTOS_STORE["by_title"].keys())
+        costos_by_sku = COSTOS_STORE.get("by_sku", {})
+        productos = []
+        for _, row in agg.iterrows():
+            key = row["_titulo_norm"]
+            sku_norm = row.get("sku") or ""
+            # El SKU exacto (cuando el Cotizador lo tiene cargado) es más confiable que el
+            # título, que puede variar entre ML y Tiendanube o traer variantes de redacción.
+            match_info = costos_by_sku.get(sku_norm) if sku_norm else None
+            if not match_info:
+                match_info = COSTOS_STORE["by_title"].get(key)
+            estado_match, score, costo_unit, desc_match = "sin costo", 0.0, None, None
+            if match_info:
+                estado_match, score = "auto", 1.0
+                costo_unit, desc_match = match_info["costo"], match_info["descripcion"]
+            elif costo_keys:
+                best_key, best_score = None, 0.0
+                for ck in costo_keys:
+                    s = difflib.SequenceMatcher(None, key, ck).ratio()
+                    if s > best_score:
+                        best_score, best_key = s, ck
+                score = best_score
+                if best_key and best_score >= 0.75:
+                    estado_match = "auto"
+                    costo_unit, desc_match = COSTOS_STORE["by_title"][best_key]["costo"], COSTOS_STORE["by_title"][best_key]["descripcion"]
+                elif best_key and best_score >= 0.55:
+                    estado_match = "revisar"
+                    costo_unit, desc_match = COSTOS_STORE["by_title"][best_key]["costo"], COSTOS_STORE["by_title"][best_key]["descripcion"]
+
+            unidades = float(row["unidades"] or 0)
+            ingresos = float(row["ingresos"] or 0)
+            costo_plataforma = float(row["costo_plataforma"] or 0)
+            costo_mercaderia = (costo_unit * unidades) if costo_unit is not None else None
+            if costo_mercaderia is not None:
+                utilidad = ingresos - costo_plataforma - costo_mercaderia
+                margen = (utilidad / ingresos * 100) if ingresos else None
+            else:
+                utilidad, margen = None, None
+
+            productos.append({
+                "titulo": row["titulo"],
+                "sku": sku_norm or None,
+                "unidades": int(round(unidades)),
+                "n_ventas": int(row["n_ventas"]),
+                "ingresos": round(ingresos, 2),
+                "costo_plataforma": round(costo_plataforma, 2),
+                "costo_unitario": round(costo_unit, 2) if costo_unit is not None else None,
+                "costo_mercaderia": round(costo_mercaderia, 2) if costo_mercaderia is not None else None,
+                "utilidad": round(utilidad, 2) if utilidad is not None else None,
+                "margen_pct": round(margen, 1) if margen is not None else None,
+                "estado_match": estado_match,
+                "match_score": round(score, 2),
+                "costo_match_desc": desc_match,
+            })
+
+        productos.sort(key=lambda p: (p["margen_pct"] is None, p["margen_pct"] if p["margen_pct"] is not None else 0))
+
+        con_costo = [p for p in productos if p["utilidad"] is not None]
+        ingresos_total = sum(p["ingresos"] for p in productos)
+        ingresos_con_costo = sum(p["ingresos"] for p in con_costo)
+        costo_plataforma_total = sum(p["costo_plataforma"] for p in productos)
+        costo_mercaderia_total = sum(p["costo_mercaderia"] for p in con_costo)
+        utilidad_total = sum(p["utilidad"] for p in con_costo)
+        margen_neto_pct = (utilidad_total / ingresos_con_costo * 100) if ingresos_con_costo else None
+
+        kpis = {
+            "ingresos_total": round(ingresos_total, 2),
+            "ingresos_con_costo": round(ingresos_con_costo, 2),
+            "ingresos_sin_costo": round(ingresos_total - ingresos_con_costo, 2),
+            "costo_plataforma_total": round(costo_plataforma_total, 2),
+            "costo_mercaderia_total": round(costo_mercaderia_total, 2),
+            "utilidad_total": round(utilidad_total, 2),
+            "margen_neto_pct": round(margen_neto_pct, 1) if margen_neto_pct is not None else None,
+            "n_productos": len(productos),
+            "n_sin_costo": len(productos) - len(con_costo),
+            "n_revisar": len([p for p in productos if p["estado_match"] == "revisar"]),
+            "cobertura_pct": round(len(con_costo) / len(productos) * 100, 1) if productos else 0,
+        }
+
+        return ok({"tiene_costos": True, "productos": productos, "kpis": kpis,
+                   "total_ml": total_ml, "total_tn": total_tn})
     except Exception as e:
         traceback.print_exc(); return err(str(e))
 
@@ -2847,6 +3625,13 @@ input[type=file]{display:none}
     Cualquier Excel/CSV
   </button>
 
+  <div id="acct-area" style="display:flex;align-items:center;gap:9px;margin-left:12px;padding-left:12px;border-left:1px solid rgba(255,255,255,.12);white-space:nowrap">
+    <span id="acct-viewing" style="display:none;font-size:10.5px;font-weight:700;color:#ffcf8a;background:rgba(255,182,72,.14);padding:3px 8px;border-radius:20px"></span>
+    <select id="acct-switcher" style="display:none;background:#0c1220;color:#fff;border:1px solid #2a3552;border-radius:6px;font-size:11.5px;padding:4px 6px" onchange="cambiarNegocioActivo(this.value)"></select>
+    <span id="acct-name" style="font-size:11.5px;color:rgba(255,255,255,.68)"></span>
+    <a href="/logout" style="font-size:11px;color:rgba(255,255,255,.4);text-decoration:none" title="Cerrar sesión">Salir</a>
+  </div>
+
 </div>
 
 <input type="file" id="fi-ml" accept=".xlsx,.xls" onchange="onFI(event,'ml')">
@@ -2886,6 +3671,21 @@ input[type=file]{display:none}
       <span class="nav-dot" style="background:#c0392b"></span>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M9 9a3 3 0 0 1 3-1.5c1.7 0 3 1 3 2.5s-1.3 2.5-3 2.5-3 1-3 2.5 1.3 2.5 3 2.5a3 3 0 0 0 3-1.5"/></svg>
       Cotizador
+    </button>
+    <button class="sb-navitem" id="tbtn-rentabilidad" onclick="showRentabilidadModule()">
+      <span class="nav-dot" style="background:#2fd48f"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
+      Rentabilidad
+    </button>
+    <button class="sb-navitem" id="tbtn-vistageneral" onclick="showVistaGeneralModule()" style="display:none">
+      <span class="nav-dot" style="background:#ffb648"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Vista General
+    </button>
+    <button class="sb-navitem" id="tbtn-admin" onclick="showAdminModule()" style="display:none">
+      <span class="nav-dot" style="background:#ff8a5c"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Negocios
     </button>
   </div>
 
@@ -4165,19 +4965,20 @@ input[type=file]{display:none}
     <div class="params">
       <div class="field">
         <label>Margen objetivo %</label>
-        <input type="number" id="cot_p_margen" value="10" step="0.5">
+        <input type="number" id="cot_p_margen" value="25" step="0.5">
       </div>
       <div class="field"><label>Comisión ML %</label><input type="number" id="cot_p_meli" value="13" step="0.1"></div>
       <div class="field"><label>IVA %</label><input type="number" id="cot_p_iva" value="21" step="0.5"></div>
       <div class="field"><label>Ingresos Brutos %</label><input type="number" id="cot_p_iibb" value="3" step="0.1"></div>
       <div class="field"><label>Ley Déb/Créd %</label><input type="number" id="cot_p_debcred" value="1.2" step="0.1"></div>
-      <div class="field"><label>Envío proveedor $</label><input type="number" id="cot_p_envioprov" value="0" step="100"></div>
+      <div class="field"><label>Envío proveedor $</label><input type="number" id="cot_p_envioprov" value="1500" step="100"></div>
       <div class="field"><label>Embalaje $</label><input type="number" id="cot_p_embalaje" value="1000" step="50"></div>
     </div>
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       <button class="btn-ghost" onclick="cot_restablecerParametros()">Restablecer valores originales</button>
       <button class="btn-primary" onclick="cot_aplicarMargenATodos()">Aplicar estos datos a todos los productos</button>
       <span id="cot_params_status" style="font-size:12px;color:var(--cot-ink-soft);"></span>
+      <span id="cot_params_pending" style="display:none;font-size:12px;font-weight:600;color:var(--cot-warn);">● Cambios sin aplicar — no afectan la tabla todavía</span>
     </div>
     <div id="cot_resumen_impuestos" style="margin-top:12px;font-size:12.5px;color:var(--cot-ink-soft);padding:10px;background:var(--cot-bg);border-radius:8px;"></div>
   </div>
@@ -4186,6 +4987,7 @@ input[type=file]{display:none}
     <h2>Agregar producto</h2>
     <div class="addrow">
       <div class="field"><label>Producto</label><input type="text" id="cot_in_nombre" placeholder="Ej: Malbec Reserva 750ml"></div>
+      <div class="field small" style="flex:0 0 120px;"><label>SKU (opcional)</label><input type="text" id="cot_in_sku" placeholder="Ej: M001"></div>
       <div class="field small"><label>Costo $</label><input type="number" id="cot_in_costo" placeholder="0" step="1"></div>
       <div class="field small" style="flex:0 0 130px;">
         <label>Costo incluye IVA</label>
@@ -4211,7 +5013,7 @@ input[type=file]{display:none}
 
   <div class="panel">
     <h2>Subir Excel con varios productos</h2>
-    <p class="sub" style="margin-bottom:10px;">El archivo tiene que tener una columna con el nombre del producto y otra con el costo. Opcionalmente podés incluir columnas de precio actual, peso (kg), logística (Full/Mercado Envíos o Flex — si no la incluís, se asume Full/ME), margen % (si querés uno distinto al general para ese producto) y precio ML del más vendido (para comparar). Si el archivo NO trae peso, lo estimamos automáticamente leyendo el título de cada producto. Detectamos las columnas por nombre, no por posición.</p>
+    <p class="sub" style="margin-bottom:10px;">El archivo tiene que tener una columna con el nombre del producto y otra con el costo. Opcionalmente podés incluir columnas de SKU/código (para identificar cada producto de forma exacta y cruzarlo mejor con Rentabilidad), precio actual, peso (kg), logística (Full/Mercado Envíos o Flex — si no la incluís, se asume Full/ME), margen % (si querés uno distinto al general para ese producto) y precio ML del más vendido (para comparar). Si el archivo NO trae peso, lo estimamos automáticamente leyendo el título de cada producto. Detectamos las columnas por nombre, no por posición.</p>
     <div class="addrow" style="align-items:center;">
       <div class="field" style="flex:0 0 auto;">
         <label>Archivo .xlsx / .xls / .csv</label>
@@ -4259,6 +5061,93 @@ input[type=file]{display:none}
 </div>
 
 
+</div>
+
+<div id="rentabilidad-module" style="display:none;flex:1;overflow-y:auto">
+<style>
+#rentabilidad-module{padding:20px 22px 60px}
+#rentabilidad-module .rent-wrap{max-width:1180px;margin:0 auto}
+#rentabilidad-module h1{font-size:20px;margin:0 0 4px;font-weight:700;color:var(--tx)}
+#rentabilidad-module .sub{color:var(--mu);font-size:13px;margin:0 0 18px}
+#rentabilidad-module .rent-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}
+#rentabilidad-module .rent-empty{background:var(--card);border:1px solid var(--br);border-radius:var(--r);padding:34px 24px;text-align:center;color:var(--mu);font-size:13.5px;line-height:1.7}
+#rentabilidad-module .rent-empty b{color:var(--tx)}
+#rentabilidad-module .rent-table-wrap{background:var(--card);border:1px solid var(--br);border-radius:var(--r);overflow:hidden;overflow-x:auto}
+#rentabilidad-module table{width:100%;border-collapse:collapse;font-size:12.5px}
+#rentabilidad-module thead th{background:#1c2136;color:var(--mu);text-align:left;padding:9px 12px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+#rentabilidad-module thead th.num,#rentabilidad-module td.num{text-align:right}
+#rentabilidad-module tbody td{padding:9px 12px;border-bottom:1px solid #2b3350;color:var(--tx)}
+#rentabilidad-module tbody tr:hover td{background:#262e46}
+#rentabilidad-module .rent-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;white-space:nowrap}
+#rentabilidad-module .rent-badge.ok{background:rgba(47,212,143,.16);color:#7ce8bd}
+#rentabilidad-module .rent-badge.bad{background:rgba(255,107,107,.16);color:#ff9b9b}
+#rentabilidad-module .rent-badge.warn{background:rgba(255,182,72,.16);color:#ffcf8a}
+#rentabilidad-module .rent-badge.mu{background:rgba(154,163,192,.14);color:var(--mu)}
+#rentabilidad-module .rent-foot{margin-top:14px;font-size:11.5px;color:var(--mu);line-height:1.6}
+</style>
+<div class="rent-wrap">
+  <h1>Rentabilidad</h1>
+  <p class="sub">Cruza tus ventas de Mercado Libre + Tienda Nube con los costos cargados en el Cotizador, producto por producto.</p>
+  <div id="rent-content"></div>
+</div>
+</div>
+
+<div id="vistageneral-module" style="display:none;flex:1;overflow-y:auto">
+<style>
+#vistageneral-module{padding:20px 22px 60px}
+#vistageneral-module .vg-wrap{max-width:1180px;margin:0 auto}
+#vistageneral-module h1{font-size:20px;margin:0 0 4px;font-weight:700;color:var(--tx)}
+#vistageneral-module .sub{color:var(--mu);font-size:13px;margin:0 0 18px}
+#vistageneral-module .rent-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}
+#vistageneral-module .rent-empty{background:var(--card);border:1px solid var(--br);border-radius:var(--r);padding:34px 24px;text-align:center;color:var(--mu);font-size:13.5px;line-height:1.7}
+#vistageneral-module .rent-table-wrap{background:var(--card);border:1px solid var(--br);border-radius:var(--r);overflow:hidden;overflow-x:auto;margin-bottom:16px}
+#vistageneral-module table{width:100%;border-collapse:collapse;font-size:12.5px}
+#vistageneral-module thead th{background:#1c2136;color:var(--mu);text-align:left;padding:9px 12px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+#vistageneral-module thead th.num,#vistageneral-module td.num{text-align:right}
+#vistageneral-module tbody td{padding:9px 12px;border-bottom:1px solid #2b3350;color:var(--tx)}
+#vistageneral-module tbody tr:hover td{background:#262e46}
+#vistageneral-module tbody tr{cursor:pointer}
+#vistageneral-module .vg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+</style>
+<div class="vg-wrap">
+  <div class="vg-head">
+    <div>
+      <h1>Vista General</h1>
+      <p class="sub">Métricas combinadas de todos los negocios autorizados. Hacé click en un negocio para ver su dashboard completo.</p>
+    </div>
+    <button class="btn btn-primary" onclick="exportarVistaGeneral()">⬇ Descargar reporte combinado</button>
+  </div>
+  <div id="vg-content"></div>
+</div>
+</div>
+
+<div id="admin-module" style="display:none;flex:1;overflow-y:auto">
+<style>
+#admin-module{padding:20px 22px 60px}
+#admin-module .adm-wrap{max-width:760px;margin:0 auto}
+#admin-module h1{font-size:20px;margin:0 0 4px;font-weight:700;color:var(--tx)}
+#admin-module .sub{color:var(--mu);font-size:13px;margin:0 0 18px}
+#admin-module .adm-form{background:var(--card);border:1px solid var(--br);border-radius:var(--r);padding:16px;display:flex;gap:8px;margin-bottom:18px;align-items:flex-end;flex-wrap:wrap}
+#admin-module .adm-field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px}
+#admin-module .adm-field label{font-size:11px;color:var(--mu);font-weight:600}
+#admin-module .adm-field input{padding:8px 10px;border-radius:8px;border:1px solid var(--br);background:#0c1220;color:#fff;font-size:13px}
+#admin-module .adm-table-wrap{background:var(--card);border:1px solid var(--br);border-radius:var(--r);overflow:hidden}
+#admin-module table{width:100%;border-collapse:collapse;font-size:12.5px}
+#admin-module thead th{background:#1c2136;color:var(--mu);text-align:left;padding:9px 12px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+#admin-module tbody td{padding:9px 12px;border-bottom:1px solid #2b3350;color:var(--tx)}
+#admin-module .adm-del{background:none;border:none;color:#ff9b9b;cursor:pointer;font-size:12px}
+#admin-module .adm-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;background:rgba(255,182,72,.16);color:#ffcf8a}
+</style>
+<div class="adm-wrap">
+  <h1>Negocios</h1>
+  <p class="sub">Autorizá acá los Gmail de cada negocio que va a usar Dashify. Se loguean con su propia cuenta y ven solo sus propios datos.</p>
+  <div class="adm-form">
+    <div class="adm-field"><label>Email de Gmail</label><input id="adm-in-email" placeholder="negocio@gmail.com"></div>
+    <div class="adm-field"><label>Nombre del negocio</label><input id="adm-in-nombre" placeholder="Ej: Beauty District" onkeydown="if(event.key==='Enter')crearNegocio()"></div>
+    <button class="btn btn-primary" onclick="crearNegocio()">+ Autorizar negocio</button>
+  </div>
+  <div id="adm-content"></div>
+</div>
 </div>
 
 </div>
@@ -4366,7 +5255,7 @@ function srcColor(name){
 
 // ── Upload ─────────────────────────────────────────────────────────────────
 function hideMainViews(){
-  ['wlc','dash','pub-module','pubs-module','mkt-module','cotizador-module'].forEach(id=>{
+  ['wlc','dash','pub-module','pubs-module','mkt-module','cotizador-module','rentabilidad-module','vistageneral-module','admin-module'].forEach(id=>{
     const el=document.getElementById(id)
     if(el) el.style.display='none'
   })
@@ -7238,12 +8127,277 @@ function showCotizadorModule(){
   if(btn) btn.style.outline='2px solid #e8b4b4'
 }
 
+function showRentabilidadModule(){
+  hideMainViews()
+  document.getElementById('rentabilidad-module').style.display='flex'
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
+  const btn=document.getElementById('tbtn-rentabilidad')
+  if(btn) btn.style.outline='2px solid #2fd48f'
+  cargarRentabilidad()
+}
+
+async function cargarRentabilidad(){
+  const cont = document.getElementById('rent-content');
+  cont.innerHTML = '<div class="rent-empty">Calculando...</div>';
+  try {
+    const r = await fetch('/api/rentabilidad');
+    const d = await r.json();
+    if (!d.ok){ cont.innerHTML = `<div class="rent-empty">Error: ${d.error||'no se pudo calcular'}</div>`; return; }
+
+    if (!d.tiene_costos){
+      cont.innerHTML = `<div class="rent-empty">
+        Todavía no hay costos cargados.<br><br>
+        Cargá tus productos (nombre + costo) en la sección <b>Cotizador</b> — Rentabilidad toma esa misma lista
+        automáticamente para calcular la ganancia real de cada venta.
+        ${(d.total_ml||d.total_tn) ? `<br><br>Ya tenés ${fN(d.total_ml||0)} ventas de ML y ${fN(d.total_tn||0)} de TN cargadas, listas para cruzar en cuanto agregues productos al Cotizador.` : ''}
+      </div>`;
+      return;
+    }
+
+    if (!d.productos || !d.productos.length){
+      cont.innerHTML = `<div class="rent-empty">
+        Ya tenés costos cargados en el Cotizador, pero todavía no hay ventas de Mercado Libre o Tienda Nube
+        para cruzar. Subí un reporte de ventas para ver la rentabilidad acá.
+      </div>`;
+      return;
+    }
+
+    const k = d.kpis;
+    const kpiHtml = `
+      <div class="rent-kpis">
+        <div class="kpi bl">${kIco('money','bl')}<div class="kl">INGRESOS TOTALES</div><div class="kv">${fmt(k.ingresos_total)}</div><div class="ks">${fN(k.n_productos)} productos</div></div>
+        <div class="kpi ${k.utilidad_total>=0?'gr':'rd'}">${kIco('check','gr')}<div class="kl">UTILIDAD NETA</div><div class="kv">${fmt(k.utilidad_total)}</div><div class="ks">sobre ${fmt(k.ingresos_con_costo)} con costo cargado</div></div>
+        <div class="kpi tl">${kIco('tag','tl')}<div class="kl">MARGEN NETO</div><div class="kv">${k.margen_neto_pct!=null?k.margen_neto_pct+'%':'—'}</div><div class="ks">promedio ponderado</div></div>
+        <div class="kpi rd">${kIco('truck','rd')}<div class="kl">COSTO MERCADERÍA</div><div class="kv">${fmt(k.costo_mercaderia_total)}</div><div class="ks">según Cotizador</div></div>
+        <div class="kpi or">${kIco('box','or')}<div class="kl">COSTOS PLATAFORMA</div><div class="kv">${fmt(k.costo_plataforma_total)}</div><div class="ks">comisiones + envío</div></div>
+        <div class="kpi pu">${kIco('receipt','pu')}<div class="kl">COBERTURA DE COSTOS</div><div class="kv">${k.cobertura_pct}%</div><div class="ks">${k.n_sin_costo} sin costo · ${k.n_revisar} a revisar</div></div>
+      </div>`;
+
+    const badgeFor = p => {
+      if (p.estado_match === 'sin costo') return '<span class="rent-badge mu">sin costo</span>';
+      if (p.estado_match === 'revisar') return `<span class="rent-badge warn">revisar (${Math.round(p.match_score*100)}%)</span>`;
+      return '<span class="rent-badge mu">—</span>';
+    };
+
+    const rows = d.productos.map(p => {
+      const margenBadge = p.margen_pct==null ? '<span class="rent-badge mu">s/d</span>'
+        : `<span class="rent-badge ${p.margen_pct>=0?'ok':'bad'}">${p.margen_pct}%</span>`;
+      return `<tr>
+        <td><div style="font-weight:600">${p.titulo}</div>${p.sku ? `<div style="font-size:10.5px;color:var(--mu);margin-top:2px">SKU: ${p.sku}</div>` : ''}${p.costo_match_desc && p.estado_match==='revisar' ? `<div style="font-size:10.5px;color:var(--mu);margin-top:2px">≈ ${p.costo_match_desc}</div>` : ''}</td>
+        <td class="num">${fN(p.unidades)}</td>
+        <td class="num">${fmt(p.ingresos)}</td>
+        <td class="num">${p.costo_unitario!=null ? fmt(p.costo_unitario) : '—'}</td>
+        <td class="num">${p.costo_mercaderia!=null ? fmt(p.costo_mercaderia) : '—'}</td>
+        <td class="num">${fmt(p.costo_plataforma)}</td>
+        <td class="num">${p.utilidad!=null ? fmt(p.utilidad) : '—'}</td>
+        <td class="num">${margenBadge}</td>
+        <td>${badgeFor(p)}</td>
+      </tr>`;
+    }).join('');
+
+    cont.innerHTML = `
+      ${kpiHtml}
+      <div class="rent-table-wrap">
+        <table>
+          <thead><tr>
+            <th>Producto</th>
+            <th class="num">Unid.</th>
+            <th class="num">Ingresos</th>
+            <th class="num">Costo unit.</th>
+            <th class="num">Costo mercadería</th>
+            <th class="num">Costos plataforma</th>
+            <th class="num">Utilidad</th>
+            <th class="num">Margen</th>
+            <th>Match costo</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="rent-foot">Utilidad = Ingresos − costos de plataforma (comisión/envío ya trackeados en ML/TN) − costo de mercadería (según el Cotizador). El match de producto es por título: exacto cuando coincide con el nombre cargado en el Cotizador, o aproximado (difflib) cuando no — revisá los marcados "revisar" y cargá en el Cotizador los que digan "sin costo" para completar la foto.</div>
+    `;
+  } catch(e){
+    cont.innerHTML = `<div class="rent-empty">No se pudo calcular la rentabilidad.</div>`;
+  }
+}
+
+// ══════ Multi-negocio: cuenta madre (Vista General + panel de Negocios) ══════
+
+let CURRENT_USER = null;
+let VG_ULTIMO = null; // última respuesta de /api/admin/vista_general (para exportar)
+
+async function cargarWhoami(){
+  try {
+    const r = await fetch('/api/whoami');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.ok) return;
+    CURRENT_USER = d;
+    document.getElementById('acct-name').textContent = d.business_name;
+    if (d.is_madre){
+      document.getElementById('tbtn-admin').style.display = 'flex';
+      document.getElementById('tbtn-vistageneral').style.display = 'flex';
+      const sw = document.getElementById('acct-switcher');
+      sw.style.display = 'inline-block';
+      sw.innerHTML = '<option value="">— mi cuenta —</option>' +
+        (d.negocios||[]).map(n => `<option value="${n.tenant_id}" ${d.viewing_tenant_id===n.tenant_id?'selected':''}>${n.business_name}</option>`).join('');
+      const viendo = document.getElementById('acct-viewing');
+      if (d.viewing_tenant_id && d.viewing_tenant_id !== d.tenant_id){
+        const neg = (d.negocios||[]).find(n=>n.tenant_id===d.viewing_tenant_id);
+        viendo.textContent = 'Viendo: ' + (neg ? neg.business_name : d.viewing_tenant_id);
+        viendo.style.display = 'inline-block';
+      } else {
+        viendo.style.display = 'none';
+      }
+    }
+  } catch(e){ /* silencioso — no bloquea el resto de la app */ }
+}
+
+async function cambiarNegocioActivo(tenantId){
+  try {
+    await fetch('/api/admin/switch_tenant', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tenant_id: tenantId || null})
+    });
+  } catch(e){}
+  location.reload(); // recarga simple: todos los módulos (ventas, costos, etc.) vuelven a pedir datos del negocio recién elegido
+}
+
+function showVistaGeneralModule(){
+  hideMainViews()
+  document.getElementById('vistageneral-module').style.display='flex'
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
+  const btn=document.getElementById('tbtn-vistageneral')
+  if(btn) btn.style.outline='2px solid #ffb648'
+  cargarVistaGeneral()
+}
+
+async function cargarVistaGeneral(){
+  const cont = document.getElementById('vg-content');
+  cont.innerHTML = '<div class="rent-empty">Calculando...</div>';
+  try {
+    const r = await fetch('/api/admin/vista_general');
+    const d = await r.json();
+    if (!d.ok){ cont.innerHTML = `<div class="rent-empty">Error: ${d.error||'no se pudo calcular'}</div>`; return; }
+    VG_ULTIMO = d;
+    if (!d.total_negocios){
+      cont.innerHTML = `<div class="rent-empty">Todavía no autorizaste ningún negocio.<br><br>Andá a <b>Negocios</b> para dar de alta el primero.</div>`;
+      return;
+    }
+    const k = d.metricas_combinadas;
+    const kpiHtml = `
+      <div class="rent-kpis">
+        <div class="kpi bl">${kIco('money','bl')}<div class="kl">INGRESOS TOTALES</div><div class="kv">${fmt(k.ingresos)}</div><div class="ks">${d.total_negocios} negocio(s)</div></div>
+        <div class="kpi gr">${kIco('check','gr')}<div class="kl">VENTAS TOTALES</div><div class="kv">${fN(k.n_ventas)}</div><div class="ks">${fN(k.unidades)} unidades</div></div>
+        <div class="kpi tl">${kIco('tag','tl')}<div class="kl">TICKET PROMEDIO</div><div class="kv">${fmt(k.ticket_prom)}</div><div class="ks">combinado, todos los negocios</div></div>
+      </div>`;
+    const rows = d.por_negocio.map(n => `
+      <tr onclick="cambiarNegocioActivo('${(d.negocios.find(x=>x.business_name===n.label)||{}).tenant_id||''}')">
+        <td>${n.label}</td>
+        <td class="num">${fN(n.n_ventas)}</td>
+        <td class="num">${fmt(n.ingresos)}</td>
+      </tr>`).join('');
+    cont.innerHTML = `
+      ${kpiHtml}
+      <div class="rent-table-wrap">
+        <table>
+          <thead><tr><th>Negocio</th><th class="num">Ventas</th><th class="num">Ingresos</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="rent-foot">Click en un negocio para ver su dashboard completo.</div>
+    `;
+  } catch(e){
+    cont.innerHTML = `<div class="rent-empty">No se pudo calcular la vista general.</div>`;
+  }
+}
+
+function exportarVistaGeneral(){
+  if (!VG_ULTIMO || !VG_ULTIMO.total_negocios){ alert('Todavía no hay datos para exportar.'); return; }
+  const rows = VG_ULTIMO.negocios.map(n => ({
+    'Negocio': n.business_name, 'Email': n.email,
+    'Ventas': n.metricas.n_ventas, 'Unidades': n.metricas.unidades,
+    'Ingresos': n.metricas.ingresos, 'Ticket promedio': n.metricas.ticket_prom,
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Vista General');
+  XLSX.writeFile(wb, `vista_general_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+function showAdminModule(){
+  hideMainViews()
+  document.getElementById('admin-module').style.display='flex'
+  document.querySelectorAll('.tbtn,.sb-navitem').forEach(b=>b.style.outline='none')
+  const btn=document.getElementById('tbtn-admin')
+  if(btn) btn.style.outline='2px solid #ff8a5c'
+  cargarAdmin()
+}
+
+async function cargarAdmin(){
+  const cont = document.getElementById('adm-content');
+  cont.innerHTML = '<div class="rent-empty">Cargando...</div>';
+  try {
+    const r = await fetch('/api/admin/users');
+    const d = await r.json();
+    if (!d.ok){ cont.innerHTML = `<div class="rent-empty">Error: ${d.error}</div>`; return; }
+    const rows = d.usuarios.map(u => `
+      <tr>
+        <td>${u.business_name}${u.is_madre?' <span class="adm-badge">madre</span>':''}</td>
+        <td>${u.email}</td>
+        <td>${u.is_madre ? '—' : `<button class="adm-del" onclick="borrarNegocio('${u.email}')">Quitar acceso</button>`}</td>
+      </tr>`).join('');
+    cont.innerHTML = `
+      <div class="adm-table-wrap">
+        <table>
+          <thead><tr><th>Negocio</th><th>Email autorizado</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch(e){
+    cont.innerHTML = `<div class="rent-empty">No se pudo cargar la lista.</div>`;
+  }
+}
+
+async function crearNegocio(){
+  const email = document.getElementById('adm-in-email').value.trim();
+  const nombre = document.getElementById('adm-in-nombre').value.trim();
+  if (!email || !email.includes('@')){ alert('Ingresá un email válido.'); return; }
+  try {
+    const r = await fetch('/api/admin/users', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email, business_name: nombre || email})
+    });
+    const d = await r.json();
+    if (!d.ok){ alert(d.error || 'No se pudo autorizar el negocio.'); return; }
+    document.getElementById('adm-in-email').value = '';
+    document.getElementById('adm-in-nombre').value = '';
+    cargarAdmin();
+    cargarWhoami(); // refresca el selector por si agregó uno nuevo
+  } catch(e){ alert('No se pudo autorizar el negocio.'); }
+}
+
+async function borrarNegocio(email){
+  if (!confirm(`¿Quitar el acceso de ${email}? Sus datos NO se borran, solo deja de poder entrar.`)) return;
+  try {
+    const r = await fetch(`/api/admin/users/${encodeURIComponent(email)}`, {method:'DELETE'});
+    const d = await r.json();
+    if (!d.ok){ alert(d.error || 'No se pudo quitar el acceso.'); return; }
+    cargarAdmin();
+    cargarWhoami();
+  } catch(e){ alert('No se pudo quitar el acceso.'); }
+}
+
 // ══════ Cotizador de vinos y bebidas (módulo integrado) ══════
 
 let cot_productos = [];
 let cot_idCounter = 1;
+// Parámetros efectivamente usados para calcular la tabla ahora mismo. Se pisan
+// SOLO al tocar "Aplicar estos datos a todos los productos" o "Restablecer
+// valores originales" — escribir en el panel de arriba los guarda en el
+// navegador pero no recalcula nada hasta que Santi lo pida explícitamente.
+let cot_paramsAplicados = null;
 
 const cot_HEADERS_NOMBRE = ['producto','nombre','titulo','título','descripcion','descripción','item','articulo','artículo'];
+const cot_HEADERS_SKU = ['sku','codigo','código','cod','code','cod. producto','codigo producto','código producto','id producto'];
 const cot_HEADERS_COSTO = ['costo','costo proveedor','costo unitario','precio costo','cost'];
 const cot_HEADERS_ACTUAL = ['precio actual','precio','pvp actual','precio venta actual','precio ml'];
 const cot_HEADERS_PESO = ['peso','peso kg','peso (kg)','kg'];
@@ -7268,6 +8422,7 @@ function cot_detectarColumnas(headerRow){
   };
   return {
     nombre: find(cot_HEADERS_NOMBRE),
+    sku: find(cot_HEADERS_SKU),
     costo: find(cot_HEADERS_COSTO),
     actual: find(cot_HEADERS_ACTUAL),
     peso: find(cot_HEADERS_PESO),
@@ -7281,6 +8436,41 @@ function cot_parseLogistica(raw){
   const n = cot_normalizarHeader(raw);
   if (n.includes('flex')) return 'flex';
   return 'full';
+}
+
+// Parsea un número que puede venir en formato argentino ("5.000" = cinco mil,
+// "1.234,56" = mil doscientos treinta y cuatro con 56) o en formato con coma/punto
+// decimal simple. Antes esto se hacía con un simple .replace(',','.') que rompía
+// con "5.000" (lo leía como 5.000 = 5), achicando el costo ~1000 veces — el bug
+// que reportó Santi al importar el Excel del cotizador.
+function cot_parseNumAR(raw){
+  if (typeof raw === 'number') return raw;
+  let s = String(raw==null?'':raw).trim();
+  if (!s) return NaN;
+  s = s.replace(/[^0-9.,-]/g, '');
+  if (!s) return NaN;
+  const neg = s.charAt(0) === '-';
+  if (neg) s = s.slice(1);
+
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+
+  if (lastComma !== -1 && lastDot !== -1){
+    // Los dos presentes: el que está más a la derecha es el separador decimal,
+    // el otro es separador de miles y se descarta.
+    if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(/,/g, '');
+  } else if (lastComma !== -1){
+    const dec = s.length - lastComma - 1;
+    const unaSola = s.indexOf(',') === lastComma;
+    s = (unaSola && (dec === 1 || dec === 2)) ? s.replace(',', '.') : s.replace(/,/g, '');
+  } else if (lastDot !== -1){
+    const dec = s.length - lastDot - 1;
+    const unoSolo = s.indexOf('.') === lastDot;
+    if (!(unoSolo && (dec === 1 || dec === 2))) s = s.replace(/\./g, '');
+  }
+  const n = parseFloat(s);
+  return neg ? -n : n;
 }
 
 function cot_manejarArchivo(ev){
@@ -7311,20 +8501,22 @@ function cot_manejarArchivo(ev){
         const row = rows[i];
         const nombre = String(row[cols.nombre]||'').trim();
         const costoRaw = row[cols.costo];
-        const costo = typeof costoRaw === 'number' ? costoRaw : parseFloat(String(costoRaw).replace(/[^0-9.,-]/g,'').replace(',','.'));
+        const costo = cot_parseNumAR(costoRaw);
         if (!nombre || isNaN(costo) || costo <= 0){ salteados++; continue; }
+
+        const sku = cols.sku !== -1 ? String(row[cols.sku]||'').trim() : '';
 
         let actual = null;
         if (cols.actual !== -1){
           const actualRaw = row[cols.actual];
-          const parsedActual = typeof actualRaw === 'number' ? actualRaw : parseFloat(String(actualRaw).replace(/[^0-9.,-]/g,'').replace(',','.'));
+          const parsedActual = cot_parseNumAR(actualRaw);
           if (!isNaN(parsedActual) && parsedActual > 0) actual = parsedActual;
         }
 
         let pesoKg = null;
         if (cols.peso !== -1){
           const pesoRaw = row[cols.peso];
-          const parsedPeso = typeof pesoRaw === 'number' ? pesoRaw : parseFloat(String(pesoRaw).replace(',','.'));
+          const parsedPeso = cot_parseNumAR(pesoRaw);
           if (!isNaN(parsedPeso) && parsedPeso > 0) pesoKg = parsedPeso;
         }
 
@@ -7340,18 +8532,18 @@ function cot_manejarArchivo(ev){
         let margenOverride = null;
         if (cols.margen !== -1){
           const mRaw = row[cols.margen];
-          const mParsed = typeof mRaw === 'number' ? mRaw : parseFloat(String(mRaw).replace(',','.'));
+          const mParsed = cot_parseNumAR(mRaw);
           if (!isNaN(mParsed) && mParsed > 0) margenOverride = mParsed;
         }
 
         let precioMl = null;
         if (cols.ml !== -1){
           const mlRaw = row[cols.ml];
-          const mlParsed = typeof mlRaw === 'number' ? mlRaw : parseFloat(String(mlRaw).replace(/[^0-9.,-]/g,'').replace(',','.'));
+          const mlParsed = cot_parseNumAR(mlRaw);
           if (!isNaN(mlParsed) && mlParsed > 0) precioMl = mlParsed;
         }
 
-        cot_productos.push({id: cot_idCounter++, nombre, costo, costoIva: costoConIva, logistica, pesoKg, pesoAuto, pesoConfianza, margenOverride, actual, precioMl});
+        cot_productos.push({id: cot_idCounter++, nombre, sku, costo, costoIva: costoConIva, logistica, pesoKg, pesoAuto, pesoConfianza, margenOverride, actual, precioMl});
         agregados++;
       }
 
@@ -7382,6 +8574,7 @@ function cot_exportarExcel(){
     }
     return {
       'Producto': p.nombre,
+      'SKU': p.sku || '',
       'Costo': p.costo,
       'Costo incluye IVA': p.costoIva ? 'Si' : 'No',
       'Logística': p.logistica === 'flex' ? 'Flex' : 'Full/Mercado Envíos',
@@ -7564,7 +8757,7 @@ function cot_tramo(pvp, logistica, pesoKg){
 }
 
 const cot_PARAM_IDS = ['cot_p_margen','cot_p_meli','cot_p_iva','cot_p_iibb','cot_p_debcred','cot_p_envioprov','cot_p_embalaje'];
-const cot_PARAM_DEFAULTS = {cot_p_margen:10, cot_p_meli:13, cot_p_iva:21, cot_p_iibb:3, cot_p_debcred:1.2, cot_p_envioprov:0, cot_p_embalaje:1000};
+const cot_PARAM_DEFAULTS = {cot_p_margen:25, cot_p_meli:13, cot_p_iva:21, cot_p_iibb:3, cot_p_debcred:1.2, cot_p_envioprov:1500, cot_p_embalaje:1000};
 const cot_LS_KEY = 'wesell_calc_vinos_params';
 
 function cot_params(){
@@ -7598,8 +8791,26 @@ function cot_cargarParametros(){
   } catch(e){}
 }
 
+// ¿Lo que Santi escribió en el panel todavía no se aplicó a la tabla?
+function cot_hayParamsPendientes(){
+  if (!cot_paramsAplicados) return false;
+  const actual = cot_params();
+  return cot_PARAM_IDS.some(id => {
+    const key = id.replace('cot_p_','').replace('envioprov','envioProv');
+    return actual[key] !== cot_paramsAplicados[key];
+  });
+}
+
+function cot_actualizarIndicadorPendiente(){
+  const el = document.getElementById('cot_params_pending');
+  if (!el) return;
+  el.style.display = cot_hayParamsPendientes() ? 'inline' : 'none';
+}
+
 function cot_aplicarMargenATodos(){
   cot_guardarParametros();
+  cot_paramsAplicados = cot_params();
+  cot_actualizarIndicadorPendiente();
   if (cot_productos.length === 0){
     cot_render();
     const st0 = document.getElementById('cot_params_status');
@@ -7615,6 +8826,8 @@ function cot_aplicarMargenATodos(){
 function cot_restablecerParametros(){
   cot_PARAM_IDS.forEach(id => document.getElementById(id).value = cot_PARAM_DEFAULTS[id]);
   cot_guardarParametros();
+  cot_paramsAplicados = cot_params();
+  cot_actualizarIndicadorPendiente();
   cot_render();
 }
 
@@ -7670,6 +8883,7 @@ function cot_toggleCampoPeso(){
 
 function cot_agregarProducto(){
   const nombre = document.getElementById('cot_in_nombre').value.trim();
+  const sku = document.getElementById('cot_in_sku').value.trim();
   const costo = parseFloat(document.getElementById('cot_in_costo').value);
   const costoIva = document.getElementById('cot_in_costoiva').value === 'si';
   const logistica = document.getElementById('cot_in_logistica').value;
@@ -7694,9 +8908,10 @@ function cot_agregarProducto(){
     pesoKg = est.peso; pesoAuto = true; pesoConfianza = est.confianza;
   }
 
-  cot_productos.push({id: cot_idCounter++, nombre, costo, costoIva, logistica, pesoKg, pesoAuto, pesoConfianza, margenOverride, actual, precioMl});
+  cot_productos.push({id: cot_idCounter++, nombre, sku, costo, costoIva, logistica, pesoKg, pesoAuto, pesoConfianza, margenOverride, actual, precioMl});
 
   document.getElementById('cot_in_nombre').value = '';
+  document.getElementById('cot_in_sku').value = '';
   document.getElementById('cot_in_costo').value = '';
   document.getElementById('cot_in_peso').value = '';
   document.getElementById('cot_in_margen').value = '';
@@ -7733,6 +8948,12 @@ function cot_limpiarTodo(){
 function cot_actualizarPrecioActual(id, val){
   const p = cot_productos.find(x => x.id === id);
   if (p) p.actual = val === '' ? null : parseFloat(val);
+  cot_render();
+}
+
+function cot_actualizarSku(id, val){
+  const p = cot_productos.find(x => x.id === id);
+  if (p) p.sku = val.trim();
   cot_render();
 }
 
@@ -7786,9 +9007,37 @@ function cot_actualizarResumenImpuestos(pp){
   el.innerHTML = `Ahora mismo la calculadora está descontando, sobre cada PVP: <b>Comisión Mercado Libre ${pp.meli}%</b>, <b>IVA ${pp.iva}%</b> (sobre el costo cuando no lo trae incluido), <b>Ingresos Brutos ${pp.iibb}%</b> (calculado sobre el PVP sin IVA), <b>Ley de Débitos/Créditos ${pp.debcred}%</b>, más el costo fijo/envío de ML según el cot_tramo de precio y peso, envío proveedor $${pp.envioProv.toLocaleString('es-AR')} y embalaje $${pp.embalaje.toLocaleString('es-AR')}. El margen objetivo general es ${pp.margen}% (se puede pisar por producto en la cot_tabla). Tocá "ver desglose" en cualquier fila para ver el cálculo completo de ese producto.`;
 }
 
+let cot_syncCostosTimer = null;
+function cot_syncCostosBackend(){
+  // Manda la lista de productos del Cotizador (con el costo final ya con IVA
+  // aplicado, mismo cálculo que usa la tabla) al backend, para que la sección
+  // de Rentabilidad pueda cruzarla contra las ventas de ML + TN.
+  clearTimeout(cot_syncCostosTimer);
+  cot_syncCostosTimer = setTimeout(() => {
+    try {
+      const pp = cot_paramsAplicados || cot_params();
+      const productos = cot_productos
+        .filter(p => p.nombre && p.costo)
+        .map(p => ({ nombre: p.nombre, sku: p.sku || '', costo: p.costoIva ? p.costo : p.costo * (1 + pp.iva/100) }));
+      // Ojo: la lista de productos del Cotizador vive solo en memoria del navegador
+      // (no se persiste), así que en cada carga de página cot_render() arranca con
+      // la lista vacía. Si mandáramos ese vacío al backend pisaríamos los costos ya
+      // sincronizados de una sesión anterior. Por eso nunca sincronizamos una lista
+      // vacía automáticamente: solo mandamos cuando hay productos cargados.
+      if (!productos.length) return;
+      fetch('/api/cotizador/sync_costos', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({productos})
+      }).catch(()=>{});
+    } catch(e){}
+  }, 600);
+}
+
 function cot_render(){
-  const pp = cot_params();
+  const pp = cot_paramsAplicados || cot_params();
   cot_actualizarResumenImpuestos(pp);
+  cot_syncCostosBackend();
   const cot_tbody = document.getElementById('cot_tbody');
   const cot_empty = document.getElementById('cot_empty');
   const cot_tabla = document.getElementById('cot_tabla');
@@ -7856,7 +9105,7 @@ function cot_render(){
     }
 
     tr.innerHTML = `
-      <td><div class="prod-name">${p.nombre}</div><div class="prod-meta">${metaExtra}</div></td>
+      <td><div class="prod-name">${p.nombre}</div><div class="prod-meta"><input type="text" value="${p.sku||''}" placeholder="SKU" title="SKU / código" style="width:64px;padding:2px 4px;border-radius:4px;border:1px solid var(--cot-line);background:var(--cot-bg);color:var(--cot-ink);font-size:11px;" onchange="cot_actualizarSku(${p.id}, this.value)"> · ${metaExtra}</div></td>
       <td>
         <select style="padding:5px 6px;border-radius:6px;border:1px solid var(--cot-line);background:var(--cot-panel);color:var(--cot-ink);font-size:12px;margin-bottom:4px;" onchange="cot_actualizarLogistica(${p.id}, this.value)">
           <option value="full" ${p.logistica==='full'?'selected':''}>Full/ME</option>
@@ -7923,12 +9172,15 @@ function cot_render(){
   `;
 }
 
-document.querySelectorAll('.cot_params input').forEach(inp => inp.addEventListener('input', () => { cot_guardarParametros(); cot_render(); }));
+document.querySelectorAll('#cotizador-module .params input').forEach(inp => inp.addEventListener('input', () => { cot_guardarParametros(); cot_actualizarIndicadorPendiente(); }));
 document.getElementById('cot_in_nombre').addEventListener('keydown', e => { if(e.key==='Enter') cot_agregarProducto(); });
 
 cot_cargarParametros();
+cot_paramsAplicados = cot_params();
 cot_toggleCampoPeso();
 cot_render();
+
+cargarWhoami();
 
 </script>
 </body>
@@ -8917,7 +10169,11 @@ def api_pub_dashboard():
 # MÓDULO PUBLICACIONES — Upload + Dashboard
 # ═══════════════════════════════════════════════════════════════════════════
 
-PUBS_STORE = {"df": None, "filename": None}
+# PUBS_STORE: proxy multi-negocio declarado arriba junto a los otros 6 stores
+# (ver sección "MULTI-NEGOCIO" cerca del inicio del archivo). Antes del
+# refactor multi-tenant vivía acá como dict plano — quedó sacado de acá a
+# propósito: una segunda asignación en este punto pisaría el proxy y volvería
+# a compartir los datos de publicaciones entre TODOS los negocios.
 
 def _parse_pubs_file(raw: bytes, filename: str) -> pd.DataFrame:
     """
