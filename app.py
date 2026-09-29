@@ -4093,9 +4093,9 @@ input[type=file]{display:none}
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       <button class="btn-ghost" onclick="cot_restablecerParametros()">Restablecer valores originales</button>
       <button class="btn-primary" onclick="cot_aplicarMargenATodos()">Aplicar estos datos a todos los productos</button>
-      <span id="cot_params_status" style="font-size:12px;color:var(--ink-soft);"></span>
+      <span id="cot_params_status" style="font-size:12px;color:var(--cot-ink-soft);"></span>
     </div>
-    <div id="cot_resumen_impuestos" style="margin-top:12px;font-size:12.5px;color:var(--ink-soft);padding:10px;background:var(--bg);border-radius:8px;"></div>
+    <div id="cot_resumen_impuestos" style="margin-top:12px;font-size:12.5px;color:var(--cot-ink-soft);padding:10px;background:var(--cot-bg);border-radius:8px;"></div>
   </div>
 
   <div class="panel">
@@ -4105,14 +4105,14 @@ input[type=file]{display:none}
       <div class="field small"><label>Costo $</label><input type="number" id="cot_in_costo" placeholder="0" step="1"></div>
       <div class="field small" style="flex:0 0 130px;">
         <label>Costo incluye IVA</label>
-        <select id="cot_in_costoiva" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:14px;">
+        <select id="cot_in_costoiva" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--cot-line);background:var(--cot-panel);color:var(--cot-ink);font-size:14px;">
           <option value="si">Sí</option>
           <option value="no">No</option>
         </select>
       </div>
       <div class="field small" style="flex:0 0 170px;">
         <label>Logística</label>
-        <select id="cot_in_logistica" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:14px;" onchange="cot_toggleCampoPeso()">
+        <select id="cot_in_logistica" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--cot-line);background:var(--cot-panel);color:var(--cot-ink);font-size:14px;" onchange="cot_toggleCampoPeso()">
           <option value="full">Full / Mercado Envíos</option>
           <option value="flex">Flex</option>
         </select>
@@ -4135,13 +4135,13 @@ input[type=file]{display:none}
       </div>
       <div class="field small" style="flex:0 0 160px;">
         <label>Costo del archivo incluye IVA</label>
-        <select id="cot_in_file_costoiva" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:14px;">
+        <select id="cot_in_file_costoiva" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--cot-line);background:var(--cot-panel);color:var(--cot-ink);font-size:14px;">
           <option value="no" selected>No (sin IVA)</option>
           <option value="si">Sí</option>
         </select>
       </div>
     </div>
-    <div id="cot_file_status" style="font-size:12px;color:var(--ink-soft);margin-top:4px;"></div>
+    <div id="cot_file_status" style="font-size:12px;color:var(--cot-ink-soft);margin-top:4px;"></div>
   </div>
 
   <div class="summary" id="cot_summary"></div>
@@ -4149,7 +4149,7 @@ input[type=file]{display:none}
   <div id="cot_exportbar" style="display:none;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
     <button class="btn-ghost" onclick="cot_exportarExcel()">Descargar tabla con PVP sugeridos (.xlsx)</button>
     <button class="btn-ghost" onclick="cot_reestimarPesos()">Re-estimar pesos automáticos</button>
-    <button class="btn-icon" style="border:1px solid var(--line);" onclick="cot_limpiarTodo()">Limpiar todo</button>
+    <button class="btn-icon" style="border:1px solid var(--cot-line);" onclick="cot_limpiarTodo()">Limpiar todo</button>
   </div>
 
   <div class="panel" style="padding:0;overflow-x:auto;">
@@ -7738,7 +7738,7 @@ function cot_render(){
         diffTexto = 'OK';
       }
     } else {
-      badge = '<span style="color:var(--ink-soft);font-size:12px;">sin precio actual</span>';
+      badge = '<span style="color:var(--cot-ink-soft);font-size:12px;">sin precio actual</span>';
     }
 
     return {p, sugerido, margenActualPct, diffTexto, badge};
@@ -7753,7 +7753,7 @@ function cot_render(){
 
   filas.forEach(({p, sugerido, diffTexto, badge}) => {
     const tr = document.createElement('tr');
-    const autoTag = p.pesoAuto ? ` <span style="color:var(--warn);font-weight:600;">(auto${p.pesoConfianza==='baja'?', revisar':''})</span>` : '';
+    const autoTag = p.pesoAuto ? ` <span style="color:var(--cot-warn);font-weight:600;">(auto${p.pesoConfianza==='baja'?', revisar':''})</span>` : '';
     const metaExtra = p.costoIva? 'costo c/IVA':'costo s/IVA';
 
     let vsMlHtml;
@@ -7769,12 +7769,12 @@ function cot_render(){
     tr.innerHTML = `
       <td><div class="prod-name">${p.nombre}</div><div class="prod-meta">${metaExtra}</div></td>
       <td>
-        <select style="padding:5px 6px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:12px;margin-bottom:4px;" onchange="cot_actualizarLogistica(${p.id}, this.value)">
+        <select style="padding:5px 6px;border-radius:6px;border:1px solid var(--cot-line);background:var(--cot-panel);color:var(--cot-ink);font-size:12px;margin-bottom:4px;" onchange="cot_actualizarLogistica(${p.id}, this.value)">
           <option value="full" ${p.logistica==='full'?'selected':''}>Full/ME</option>
           <option value="flex" ${p.logistica==='flex'?'selected':''}>Flex</option>
         </select>
-        <div style="font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;">
-          <input type="number" value="${p.pesoKg||''}" step="0.1" style="width:55px;padding:3px 5px;border-radius:5px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:11px;" onchange="cot_actualizarPeso(${p.id}, this.value)"> kg${autoTag}
+        <div style="font-size:11px;color:var(--cot-ink-soft);display:flex;align-items:center;gap:4px;">
+          <input type="number" value="${p.pesoKg||''}" step="0.1" style="width:55px;padding:3px 5px;border-radius:5px;border:1px solid var(--cot-line);background:var(--cot-panel);color:var(--cot-ink);font-size:11px;" onchange="cot_actualizarPeso(${p.id}, this.value)"> kg${autoTag}
         </div>
       </td>
       <td class="num">${cot_fmt(p.costo)}</td>
@@ -7784,8 +7784,8 @@ function cot_render(){
       </td>
       <td class="num"><input class="pvp-actual" style="width:70px;" type="number" value="${p.margenOverride===null||p.margenOverride===undefined?'':p.margenOverride}" placeholder="gral." step="0.5" onchange="cot_actualizarMargen(${p.id}, this.value)"></td>
       <td class="num">
-        <div style="font-weight:700;">${isNaN(sugerido) ? '<span style="color:var(--bad);font-weight:600;font-size:12px;">margen inalcanzable</span>' : cot_fmt(sugerido)}</div>
-        <div style="font-size:11px;color:var(--ink-soft);">${diffTexto}</div>
+        <div style="font-weight:700;">${isNaN(sugerido) ? '<span style="color:var(--cot-bad);font-weight:600;font-size:12px;">margen inalcanzable</span>' : cot_fmt(sugerido)}</div>
+        <div style="font-size:11px;color:var(--cot-ink-soft);">${diffTexto}</div>
         <button class="btn-icon" style="padding:2px 0;font-size:11px;text-decoration:underline;" onclick="cot_toggleDesglose(${p.id})">ver desglose</button>
       </td>
       <td class="num">
@@ -7801,7 +7801,7 @@ function cot_render(){
       const trD = document.createElement('tr');
       let cuerpo;
       if (!d.ok){
-        cuerpo = `<div style="padding:10px 4px;color:var(--bad);font-size:13px;">
+        cuerpo = `<div style="padding:10px 4px;color:var(--cot-bad);font-size:13px;">
           Con un margen objetivo de ${d.margen}% no alcanza: sumando comisión ML (${pp.meli}%), IIBB (${pp.iibb}%) y Ley Déb/Créd (${pp.debcred}%) ya se come más del 100% del PVP. Bajá el margen pedido para este producto o revisá los otros porcentajes.
         </div>`;
       } else {
@@ -7818,18 +7818,18 @@ function cot_render(){
             ${d.envioMlGratis ? `<tr><td>Envío gratis ML (PVP ≥ $33.000, por peso)</td><td class="num">− ${cot_fmt(d.envioMlGratis)}</td></tr>` : ''}
             ${d.envioProveedor ? `<tr><td>Envío proveedor</td><td class="num">− ${cot_fmt(d.envioProveedor)}</td></tr>` : ''}
             <tr><td>Embalaje</td><td class="num">− ${cot_fmt(d.embalaje)}</td></tr>
-            <tr style="border-top:1px solid var(--line);font-weight:700;"><td>Ganancia neta (= margen objetivo)</td><td class="num">${cot_fmt(d.gananciaNeta)}</td></tr>
+            <tr style="border-top:1px solid var(--cot-line);font-weight:700;"><td>Ganancia neta (= margen objetivo)</td><td class="num">${cot_fmt(d.gananciaNeta)}</td></tr>
           </table>
         </div>`;
       }
-      trD.innerHTML = `<td colspan="8" style="background:var(--bg);">${cuerpo}</td>`;
+      trD.innerHTML = `<td colspan="8" style="background:var(--cot-bg);">${cuerpo}</td>`;
       cot_tbody.appendChild(trD);
     }
   });
 
   document.getElementById('cot_summary').innerHTML = `
     <div class="stat"><div class="n">${cot_productos.length}</div><div class="l">Productos cargados</div></div>
-    <div class="stat"><div class="n" style="color:${bajoObjetivo>0?'var(--bad)':'var(--good)'}">${bajoObjetivo}</div><div class="l">Bajo el margen objetivo</div></div>
+    <div class="stat"><div class="n" style="color:${bajoObjetivo>0?'var(--cot-bad)':'var(--cot-good)'}">${bajoObjetivo}</div><div class="l">Bajo el margen objetivo</div></div>
     <div class="stat"><div class="n">${cot_fmt(totalRecuperar)}</div><div class="l">A recuperar (suma de subas sugeridas)</div></div>
   `;
 }
