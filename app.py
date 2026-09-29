@@ -57,6 +57,19 @@ ML_STORE = {
     "files":   [],     # historial de archivos cargados
 }
 
+# ── Store persistente para Tienda Nube (upsert por id_venta = Número de orden) ──
+# Mismo esquema que ML_STORE: todas las planillas TN se fusionan en un único
+# DataFrame acumulado. Como un pedido puede tener varias líneas (una por
+# producto), el upsert reemplaza TODAS las filas de un "Número de orden" que
+# vuelve a aparecer en una planilla nueva (no solo una fila individual).
+TN_STORE = {
+    "sid":     None,
+    "df":      None,
+    "config":  None,
+    "col_info":None,
+    "files":   [],
+}
+
 # ── Store de Fichas Técnicas de ML ──────────────────────────────────────────
 # Mapeo { id_publicacion → categoria, sku → categoria, titulo_lower → categoria }
 # Construido desde la planilla de fichas técnicas (una hoja por categoría).
@@ -1265,7 +1278,7 @@ def _get_pg_conn():
 
 def save_state():
     blob = pickle.dumps({
-        "STORE": STORE, "ML_STORE": ML_STORE,
+        "STORE": STORE, "ML_STORE": ML_STORE, "TN_STORE": TN_STORE,
         "FICHAS_STORE": FICHAS_STORE, "PUB_STORE": PUB_STORE,
     })
     try:
@@ -1312,10 +1325,12 @@ def load_state():
         data = pickle.loads(blob)
         STORE.update(data.get("STORE", {}))
         ML_STORE.update(data.get("ML_STORE", {}))
+        TN_STORE.update(data.get("TN_STORE", {}))
         FICHAS_STORE.update(data.get("FICHAS_STORE", {}))
         PUB_STORE.update(data.get("PUB_STORE", {}))
         print(f"[Dashify] Estado cargado desde {source_desc} "
-              f"({len(STORE)} fuente(s), {len(ML_STORE.get('files') or [])} archivo(s) ML)")
+              f"({len(STORE)} fuente(s), {len(ML_STORE.get('files') or [])} archivo(s) ML, "
+              f"{len(TN_STORE.get('files') or [])} archivo(s) TN)")
     except Exception:
         traceback.print_exc()
 
@@ -1407,17 +1422,10 @@ def api_upload_ml():
         ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
         if ext == "csv":
             # CSV subido en ML → redirigir automáticamente al parser de TN
+            # (mismo upsert acumulado que /api/upload/tn, no crea un sid suelto)
             df_new, auto_config = read_tn(raw, f.filename)
-            df_new["fuente"] = "Tienda Nube"
-            sid_tn = str(uuid.uuid4())
-            col_info_tn = infer_column_roles(df_new)
-            STORE[sid_tn] = {"name": f.filename, "source": "tn", "df": df_new,
-                             "config": auto_config, "col_info": col_info_tn}
-            return ok({"sid": sid_tn, "filename": f.filename, "source": "tn",
-                       "total_rows": len(df_new), "cols": list(df_new.columns),
-                       "col_info": col_info_tn, "config": auto_config,
-                       "filtros": filtros_disp(df_new),
-                       "_aviso": "CSV detectado: cargado como Tienda Nube automáticamente"})
+            return _tn_upsert_and_respond(df_new, auto_config, f.filename,
+                extra={"_aviso": "CSV detectado: cargado como Tienda Nube automáticamente"})
         df_new, auto_config = read_ml(raw, f.filename)
         col_info = infer_column_roles(df_new)
 
@@ -1500,23 +1508,76 @@ def api_upload_ml():
     except Exception as e:
         traceback.print_exc(); return err(str(e))
 
+def _tn_upsert_and_respond(df_new, auto_config, filename, extra=None):
+    """
+    Fusiona una planilla de Tienda Nube con el acumulado TN_STORE (upsert por
+    Número de orden). Un pedido puede tener varias filas (una por producto),
+    así que el reemplazo es "por grupo de Número de orden": si ese pedido
+    vuelve a aparecer, se borran TODAS sus filas viejas y se ponen las nuevas
+    (evita duplicar líneas). Devuelve la respuesta JSON lista para el cliente.
+    """
+    df_new["fuente"] = "Tienda Nube"
+    col_info = infer_column_roles(df_new)
+
+    n_added = n_updated = 0
+    KEY = "id_venta"
+
+    if TN_STORE["df"] is None:
+        df_merged = df_new.copy()
+        n_added   = df_new[KEY].nunique() if KEY in df_new.columns else len(df_new)
+    else:
+        df_acc = TN_STORE["df"].copy()
+
+        if KEY in df_acc.columns and KEY in df_new.columns:
+            orders_acc = set(df_acc[KEY].dropna().astype(str))
+            orders_new = set(df_new[KEY].dropna().astype(str))
+
+            n_added   = len(orders_new - orders_acc)
+            n_updated = len(orders_new & orders_acc)
+
+            # Quitar del acumulado todas las filas de los pedidos que
+            # vienen en la planilla nueva (se van a reemplazar enteros)
+            df_acc = df_acc[~df_acc[KEY].astype(str).isin(orders_new)]
+            df_merged = pd.concat([df_acc, df_new], ignore_index=True)
+        else:
+            # Sin columna clave (formato genérico): concatenar y deduplicar
+            df_merged = pd.concat([df_acc, df_new], ignore_index=True).drop_duplicates()
+            n_added   = len(df_new)
+
+    df_merged["fuente"] = "Tienda Nube"
+
+    TN_STORE["df"]       = df_merged
+    TN_STORE["config"]   = auto_config
+    TN_STORE["col_info"] = col_info
+    TN_STORE["files"].append(filename)
+
+    if TN_STORE["sid"] is None:
+        TN_STORE["sid"] = str(uuid.uuid4())
+    sid = TN_STORE["sid"]
+
+    STORE[sid] = {"name":"Tienda Nube (acumulado)","source":"tn","df":df_merged,
+                  "config":auto_config,"col_info":col_info}
+    resp = {"sid":sid,"filename":filename,"source":"tn",
+            "total_rows":len(df_merged),"cols":list(df_merged.columns),
+            "col_info":col_info,"config":auto_config,
+            "filtros":filtros_disp(df_merged),
+            "upsert": {
+                "added":   n_added,
+                "updated": n_updated,
+                "total":   len(df_merged),
+                "files":   TN_STORE["files"],
+            }}
+    if extra: resp.update(extra)
+    return ok(resp)
+
 @app.route("/api/upload/tn", methods=["POST"])
 def api_upload_tn():
     if "file" not in request.files: return err("Sin archivo.")
     f = request.files["file"]
     try:
         raw = f.read()
-        df, auto_config = read_tn(raw, f.filename)
-        # Garantizar fuente siempre correcta
-        df["fuente"] = "Tienda Nube"
-        sid = str(uuid.uuid4())
-        col_info = infer_column_roles(df)
-        STORE[sid] = {"name":f.filename,"source":"tn","df":df,
-                      "config":auto_config,"col_info":col_info}
-        return ok({"sid":sid,"filename":f.filename,"source":"tn",
-                   "total_rows":len(df),"cols":list(df.columns),
-                   "col_info":col_info,"config":auto_config,
-                   "filtros":filtros_disp(df)})
+        df_new, auto_config = read_tn(raw, f.filename)
+        return _tn_upsert_and_respond(df_new, auto_config, f.filename)
     except Exception as e:
         traceback.print_exc(); return err(str(e))
 
@@ -1705,6 +1766,13 @@ def api_delete(sid):
         ML_STORE["config"]  = None
         ML_STORE["col_info"]= None
         ML_STORE["files"]   = []
+    # Si se elimina el sid de TN, resetear el acumulado
+    if TN_STORE["sid"] == sid:
+        TN_STORE["sid"]     = None
+        TN_STORE["df"]      = None
+        TN_STORE["config"]  = None
+        TN_STORE["col_info"]= None
+        TN_STORE["files"]   = []
     return ok({"deleted": sid})
 
 
@@ -4384,9 +4452,10 @@ async function up(file,src){
       return
     }
 
-    // Para ML: actualizar el DS existente si el sid ya estaba registrado (upsert)
+    // Para ML y TN: actualizar el DS existente si el sid ya estaba registrado (upsert)
+    const ACC_NAME = {ml:"Mercado Libre (acumulado)", tn:"Tienda Nube (acumulado)"}
     const isNew = !S.sids.includes(d.sid)
-    DS[d.sid]={name: src==="ml" ? "Mercado Libre (acumulado)" : d.filename,
+    DS[d.sid]={name: ACC_NAME[src] || d.filename,
                source:src, rows:d.total_rows,
                cols:d.cols, colInfo:d.col_info, config:d.config,
                upsert: d.upsert||null}
@@ -4402,12 +4471,14 @@ async function up(file,src){
     $("dash").style.display="block"
     S.page=0
 
-    // Mostrar resumen del upsert para ML
-    if(src==="ml" && d.upsert){
+    // Mostrar resumen del upsert para ML / TN
+    if((src==="ml"||src==="tn") && d.upsert){
       const u=d.upsert
+      const tag = src==="ml" ? "ML" : "TN"
+      const unidad = src==="ml" ? "ventas" : "pedidos"
       const msg = u.updated>0
-        ? `✓ ML: +${u.added} nuevas, ${u.updated} actualizadas · Total acumulado: ${u.total} ventas`
-        : `✓ ML: +${u.added} ventas nuevas cargadas · Total acumulado: ${u.total}`
+        ? `✓ ${tag}: +${u.added} nuevos, ${u.updated} actualizados · Total acumulado: ${u.total} filas`
+        : `✓ ${tag}: +${u.added} ${unidad} nuevos cargados · Total acumulado: ${u.total}`
       showToast(msg)
     }
 
@@ -4458,12 +4529,14 @@ function renderSideFiles(){
       el.innerHTML=`<div style="padding:5px 10px 5px 18px;font-size:11px;color:rgba(255,255,255,.2)">Sin archivos</div>`
       return
     }
-    if(src==="ml"){
-      // ML: un único bloque acumulado con lista de archivos cargados
+    if(src==="ml"||src==="tn"){
+      // ML/TN: un único bloque acumulado con lista de archivos cargados
       const sid=mine[0]
       const ds=DS[sid]
       const u=ds.upsert
       const fileList=(u&&u.files?u.files:[ds.name])
+      const label = src==="ml" ? "ML" : "TN"
+      const unidad = src==="ml" ? "ventas" : "filas"
       el.innerHTML=`
         <div style="padding:5px 10px 5px 14px">
           ${fileList.map(fn=>`
@@ -4471,11 +4544,11 @@ function renderSideFiles(){
               <span class="src-fn" title="${fn}" style="font-size:10px">📄 ${fn}</span>
             </div>`).join("")}
           <div style="margin-top:4px;font-size:10px;color:rgba(255,255,255,.38);padding-left:4px">
-            Total acumulado: ${ds.rows} ventas
+            Total acumulado: ${ds.rows} ${unidad}
           </div>
         </div>
         <div style="padding:0 10px 6px 14px">
-          <button class="sdl" style="font-size:11px;color:rgba(255,60,60,.5)" onclick="delSrc('${sid}')">✕ Limpiar ML</button>
+          <button class="sdl" style="font-size:11px;color:rgba(255,60,60,.5)" onclick="delSrc('${sid}')">✕ Limpiar ${label}</button>
         </div>`
     } else {
       el.innerHTML=mine.map(sid=>`
